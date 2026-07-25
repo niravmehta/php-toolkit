@@ -492,7 +492,7 @@ class Push_MD_Seeder {
 			return true;
 		}
 
-		return in_array( $path, array( 'AGENTS.md', 'CLAUDE.md' ), true );
+		return in_array( $path, array( '.gitignore', 'AGENTS.md', 'CLAUDE.md' ), true );
 	}
 
 	private static function trim_checkout_preview_content( $content, $max_length ) {

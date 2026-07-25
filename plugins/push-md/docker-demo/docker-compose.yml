@@ -28,6 +28,7 @@ services:
     volumes:
       - ../../..:/srv/php-toolkit:ro
       - wp:/var/www/html
+      - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
 
   init:
     image: wordpress:cli-php8.2
@@ -47,6 +48,7 @@ services:
       - wp:/var/www/html
       - ../../..:/srv/php-toolkit:ro
       - ./init.sh:/init.sh:ro
+      - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
     entrypoint: ["bash", "/init.sh"]
     restart: "no"
 

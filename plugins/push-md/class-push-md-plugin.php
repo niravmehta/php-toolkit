@@ -84,9 +84,19 @@ class Push_MD_Plugin {
 		add_filter( 'rest_post_dispatch', array( __CLASS__, 'add_authentication_challenge' ), 10, 3 );
 		add_filter( 'rest_pre_serve_request', array( __CLASS__, 'serve_git_response' ), 10, 4 );
 
-		Push_MD_Seeder::bootstrap();
-		Push_MD_Admin::bootstrap();
-		Push_MD_Pull_Requests::bootstrap();
+		add_filter( 'push_md_supported_frontmatter_keys', array( __CLASS__, 'add_seo_supported_frontmatter_keys' ) );
+		add_filter( 'push_md_export_frontmatter', array( __CLASS__, 'handle_seo_export_frontmatter' ), 10, 2 );
+		add_action( 'push_md_import_frontmatter', array( __CLASS__, 'handle_seo_import_frontmatter' ), 10, 4 );
+
+		if ( class_exists( 'Push_MD_Seeder' ) ) {
+			Push_MD_Seeder::bootstrap();
+		}
+		if ( class_exists( 'Push_MD_Admin' ) ) {
+			Push_MD_Admin::bootstrap();
+		}
+		if ( class_exists( 'Push_MD_Pull_Requests' ) ) {
+			Push_MD_Pull_Requests::bootstrap();
+		}
 	}
 
 	public static function on_activation() {
@@ -931,7 +941,22 @@ class Push_MD_Plugin {
 			}
 			$metadata = self::normalize_supported_frontmatter(
 				$metadata,
-				array( 'id', 'title', 'date', 'status', 'description' )
+				apply_filters(
+					'push_md_supported_frontmatter_keys',
+					array(
+						'id',
+						'title',
+						'date',
+						'status',
+						'description',
+						'excerpt',
+						'author',
+						'categories',
+						'tags',
+						'featured_image',
+					),
+					$post_type
+				)
 			);
 		}
 
@@ -1525,6 +1550,8 @@ class Push_MD_Plugin {
 
 		self::add_default_agent_guidance_files( $files, $has_knowledge_skills, $agent_guide_skill_path );
 		self::add_global_styles_overlay_file( $files );
+		self::add_master_taxonomy_and_author_files( $files );
+		self::add_gitignore_file( $files );
 
 		if ( $has_knowledge_skills ) {
 			foreach ( self::get_agent_skills_directory_symlink_paths() as $symlink_path => $target ) {
@@ -1993,12 +2020,45 @@ class Push_MD_Plugin {
 		$metadata = array(
 			'id'     => array( (string) $post->ID ),
 			'title'  => array( $post->post_title ),
+			'slug'   => array( $post->post_name ),
 			'date'   => array( self::format_post_date_for_frontmatter( $post ) ),
 			'status' => array( self::frontmatter_status_from_post_status( $post->post_status ) ),
 		);
 		if ( '' !== trim( $post->post_excerpt ) ) {
 			$metadata['description'] = array( $post->post_excerpt );
 		}
+
+		$author_user = get_userdata( $post->post_author );
+		if ( $author_user ) {
+			$metadata['author'] = array( $author_user->user_login );
+		} elseif ( $post->post_author ) {
+			$metadata['author'] = array( (string) $post->post_author );
+		}
+
+		$categories = get_the_terms( $post->ID, 'category' );
+		if ( ! empty( $categories ) && ! is_wp_error( $categories ) ) {
+			$cat_paths = array();
+			foreach ( $categories as $cat ) {
+				$cat_paths[] = self::get_category_path_string( $cat );
+			}
+			$metadata['categories'] = array( implode( ', ', $cat_paths ) );
+		}
+
+		$tags = get_the_terms( $post->ID, 'post_tag' );
+		if ( ! empty( $tags ) && ! is_wp_error( $tags ) ) {
+			$tag_names        = wp_list_pluck( $tags, 'name' );
+			$metadata['tags'] = array( implode( ', ', $tag_names ) );
+		}
+
+		$thumb_id = get_post_thumbnail_id( $post->ID );
+		if ( $thumb_id ) {
+			$thumb_url = wp_get_attachment_url( $thumb_id );
+			if ( $thumb_url ) {
+				$metadata['featured_image'] = array( $thumb_url );
+			}
+		}
+
+		$metadata = apply_filters( 'push_md_export_frontmatter', $metadata, $post );
 
 		$producer = new MarkdownProducer(
 			new BlocksWithMetadata(
@@ -2179,6 +2239,11 @@ class Push_MD_Plugin {
 			);
 		}
 
+		$files['.gitignore'] = array(
+			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+			'content' => self::get_default_gitignore_content(),
+		);
+
 		return $files;
 	}
 
@@ -2292,6 +2357,7 @@ class Push_MD_Plugin {
 
 		self::reject_symlink_file_changes( $old_files, $new_files );
 		self::reject_executable_file_changes( $old_files, $new_files );
+		self::reject_gitignore_file_changes( $old_files, $new_files );
 		self::reject_deleted_raw_block_files( $old_files, $new_files );
 		self::reject_deleted_theme_base_files( $old_files, $new_files );
 		self::reject_deleted_global_styles_files( $old_files, $new_files );
@@ -2329,16 +2395,26 @@ class Push_MD_Plugin {
 		$trash_plans      = array();
 		self::reject_symlink_file_changes( $old_files, $new_files );
 		self::reject_executable_file_changes( $old_files, $new_files );
+		self::reject_gitignore_file_changes( $old_files, $new_files );
 		self::reject_deleted_raw_block_files( $old_files, $new_files );
 		self::reject_deleted_theme_base_files( $old_files, $new_files );
 		self::reject_deleted_global_styles_files( $old_files, $new_files );
 		self::reject_deleted_page_parent_files_with_remaining_children( $old_files, $new_files );
 
+		foreach ( array( 'categories.md', 'tags.md', 'authors.md' ) as $master_file ) {
+			if ( isset( $new_files[ $master_file ] ) ) {
+				$master_entry = $new_files[ $master_file ];
+				if ( ! isset( $old_files[ $master_file ] ) || ! self::repository_entries_match( $old_files[ $master_file ], $master_entry ) ) {
+					self::upsert_master_metadata_from_markdown( $master_file, $master_entry['content'], array( 'dry_run' => $dry_run ) );
+				}
+			}
+		}
+
 		foreach ( $new_files as $path => $entry ) {
 			if ( isset( $old_files[ $path ] ) && self::repository_entries_match( $old_files[ $path ], $entry ) ) {
 				continue;
 			}
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
 				continue;
 			}
 
@@ -2367,7 +2443,7 @@ class Push_MD_Plugin {
 			if ( isset( $new_files[ $path ] ) ) {
 				continue;
 			}
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
 				continue;
 			}
 
@@ -2576,6 +2652,10 @@ class Push_MD_Plugin {
 
 	private static function upsert_post_from_markdown( $path, $markdown, $options = array() ) {
 		self::assert_content_has_no_nul_bytes( $markdown );
+		if ( self::is_master_metadata_path( $path ) ) {
+			return self::upsert_master_metadata_from_markdown( $path, $markdown, $options );
+		}
+
 		$post_type = self::path_to_post_type( $path );
 		$slug      = self::path_to_slug( $path );
 		if ( 'wp_knowledge' === $post_type ) {
@@ -2598,10 +2678,28 @@ class Push_MD_Plugin {
 		}
 
 		self::reject_path_identity_frontmatter( $metadata );
-		$metadata      = self::normalize_supported_frontmatter(
+		$metadata = self::normalize_supported_frontmatter(
 			$metadata,
-			array( 'id', 'title', 'date', 'status', 'description' )
+			apply_filters(
+				'push_md_supported_frontmatter_keys',
+				array(
+					'id',
+					'title',
+					'slug',
+					'date',
+					'status',
+					'description',
+					'excerpt',
+					'author',
+					'categories',
+					'tags',
+					'featured_image',
+				),
+				$post_type
+			)
 		);
+		self::validate_post_frontmatter_references( $metadata, $post_type );
+
 		$post_id       = self::find_post_id_by_path_metadata( $path, $metadata );
 		$existing_post = $post_id ? get_post( $post_id ) : null;
 		if ( $existing_post ) {
@@ -2636,7 +2734,21 @@ class Push_MD_Plugin {
 			'post_status'  => $post_status,
 			'post_content' => $result->get_block_markup(),
 		);
-		if ( ! $existing_post || ! self::is_current_slugless_fallback_path( $path, $existing_post ) ) {
+		if ( isset( $metadata['slug'] ) && '' !== trim( (string) $metadata['slug'] ) ) {
+			$requested_slug = sanitize_title( $metadata['slug'] );
+			if ( $existing_post ) {
+				if ( $requested_slug !== $existing_post->post_name ) {
+					$postarr['post_name'] = $requested_slug;
+				}
+			} else {
+				$conflict = function_exists( 'get_page_by_path' ) ? get_page_by_path( $requested_slug, OBJECT, $post_type ) : false;
+				if ( ! $conflict ) {
+					$postarr['post_name'] = $requested_slug;
+				} else {
+					$postarr['post_name'] = $slug;
+				}
+			}
+		} elseif ( ! $existing_post || ! self::is_current_slugless_fallback_path( $path, $existing_post ) ) {
 			$postarr['post_name'] = $slug;
 		}
 		if ( 'page' === $post_type ) {
@@ -2649,8 +2761,17 @@ class Push_MD_Plugin {
 			$postarr['post_date_gmt'] = $post_date_gmt;
 			$postarr['post_date']     = get_date_from_gmt( $post_date_gmt );
 		}
-		if ( array_key_exists( 'description', $metadata ) ) {
+		if ( array_key_exists( 'excerpt', $metadata ) ) {
+			$postarr['post_excerpt'] = $metadata['excerpt'];
+		} elseif ( array_key_exists( 'description', $metadata ) ) {
 			$postarr['post_excerpt'] = $metadata['description'];
+		}
+
+		if ( isset( $metadata['author'] ) && '' !== trim( $metadata['author'] ) ) {
+			$author_id = self::resolve_frontmatter_author_id( $metadata['author'] );
+			if ( $author_id > 0 ) {
+				$postarr['post_author'] = $author_id;
+			}
 		}
 
 		$change_action = $existing_post && 'trash' === $existing_post->post_status ? 'restored' : ( $existing_post ? 'updated' : 'created' );
@@ -2672,6 +2793,18 @@ class Push_MD_Plugin {
 		if ( is_wp_error( $post_id ) ) {
 			throw new Exception( esc_html( $post_id->get_error_message() ) );
 		}
+
+		if ( isset( $metadata['categories'] ) ) {
+			self::assign_post_categories( $post_id, $metadata['categories'] );
+		}
+		if ( isset( $metadata['tags'] ) ) {
+			self::assign_post_tags( $post_id, $metadata['tags'] );
+		}
+		if ( isset( $metadata['featured_image'] ) ) {
+			self::assign_post_featured_image( $post_id, $metadata['featured_image'] );
+		}
+
+		do_action( 'push_md_import_frontmatter', $post_id, $metadata, $postarr, $existing_post );
 
 		$post = get_post( $post_id );
 
@@ -3831,9 +3964,6 @@ class Push_MD_Plugin {
 	}
 
 	private static function reject_path_identity_frontmatter( $metadata ) {
-		if ( isset( $metadata['slug'] ) ) {
-			throw new Exception( 'Push rejected because Markdown front matter must not include a slug. Rename the file path only when creating distinct content.' );
-		}
 		if ( isset( $metadata['type'] ) ) {
 			throw new Exception( 'Push rejected because Markdown front matter must not include a type. The directory determines the post type.' );
 		}
@@ -4182,6 +4312,10 @@ class Push_MD_Plugin {
 	}
 
 	private static function path_to_post_type( $path ) {
+		if ( self::is_master_metadata_path( $path ) || self::is_gitignore_path( $path ) ) {
+			return 'master_metadata';
+		}
+
 		$segments = explode( '/', ltrim( $path, '/' ) );
 		if ( ! empty( $segments[0] ) && 'wp_knowledge' === $segments[0] && ! self::knowledge_available() ) {
 			throw new Exception( 'Push rejected because WordPress Knowledge is not available on this site.' );
@@ -4197,6 +4331,10 @@ class Push_MD_Plugin {
 	}
 
 	private static function path_to_slug( $path ) {
+		if ( self::is_master_metadata_path( $path ) || self::is_gitignore_path( $path ) ) {
+			return pathinfo( basename( $path ), PATHINFO_FILENAME );
+		}
+
 		if ( self::is_knowledge_skill_path( $path ) ) {
 			$segments = explode( '/', ltrim( $path, '/' ) );
 			self::assert_markdown_slug_is_canonical( $segments[2] );
@@ -4728,6 +4866,980 @@ class Push_MD_Plugin {
 		}
 
 		return $message;
+	}
+
+	private static function is_gitignore_path( $path ) {
+		return '.gitignore' === ltrim( (string) $path, '/' );
+	}
+
+	private static function is_master_metadata_path( $path ) {
+		$clean_path = ltrim( $path, '/' );
+
+		return in_array( $clean_path, array( 'categories.md', 'tags.md', 'authors.md' ), true );
+	}
+
+	private static function add_gitignore_file( &$files ) {
+		$files['.gitignore'] = array(
+			'post'    => null,
+			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+			'content' => self::get_default_gitignore_content(),
+		);
+	}
+
+	private static function get_default_gitignore_content() {
+		return implode(
+			"\n",
+			array(
+				'# Ignore everything by default',
+				'*',
+				'',
+				'# Allow directories so Git can traverse into them',
+				'!*/',
+				'',
+				'# Root files',
+				'!.gitignore',
+				'!AGENTS.md',
+				'!CLAUDE.md',
+				'!categories.md',
+				'!tags.md',
+				'!authors.md',
+				'',
+				'# Guidance directories',
+				'!.agents/',
+				'!.agents/**',
+				'!.claude/',
+				'!.claude/**',
+				'',
+				'# Posts and Pages',
+				'!post/',
+				'!post/*.md',
+				'!page/',
+				'!page/**/*.md',
+				'',
+				'# Gutenberg Block Templates and Template Parts',
+				'!wp_template/',
+				'!wp_template/**/*.html',
+				'!wp_template_part/',
+				'!wp_template_part/**/*.html',
+				'!wp_navigation/',
+				'!wp_navigation/*.html',
+				'',
+				'# Theme JSON and Global Styles',
+				'!wp_theme/',
+				'!wp_theme/**/*.json',
+				'!wp_global_styles/',
+				'!wp_global_styles/*.json',
+				'',
+				'# Guidelines',
+				'!wp_guideline/',
+				'!wp_guideline/**',
+				'',
+			)
+		);
+	}
+
+	private static function reject_gitignore_file_changes( $old_files, $new_files ) {
+		foreach ( $new_files as $path => $entry ) {
+			if ( ! self::is_gitignore_path( $path ) ) {
+				continue;
+			}
+			if ( isset( $old_files[ $path ] ) && ! self::repository_entries_match( $old_files[ $path ], $entry ) ) {
+				throw new Exception( 'Push rejected because .gitignore is managed by Push MD and cannot be modified.' );
+			}
+		}
+
+		foreach ( $old_files as $path => $entry ) {
+			if ( ! self::is_gitignore_path( $path ) ) {
+				continue;
+			}
+			if ( ! isset( $new_files[ $path ] ) ) {
+				throw new Exception( 'Push rejected because .gitignore is managed by Push MD and cannot be deleted.' );
+			}
+		}
+	}
+
+	private static function add_master_taxonomy_and_author_files( &$files ) {
+		$files['categories.md'] = array(
+			'post'    => null,
+			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+			'content' => self::export_categories_markdown(),
+		);
+		$files['tags.md']       = array(
+			'post'    => null,
+			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+			'content' => self::export_tags_markdown(),
+		);
+		$files['authors.md']    = array(
+			'post'    => null,
+			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+			'content' => self::export_authors_markdown(),
+		);
+	}
+
+	private static function export_categories_markdown() {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'category',
+				'hide_empty' => false,
+				'orderby'    => 'name',
+				'order'      => 'ASC',
+			)
+		);
+		$list  = array();
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$parent_slug = '';
+				if ( $term->parent > 0 ) {
+					$parent_term = get_term( $term->parent, 'category' );
+					if ( $parent_term && ! is_wp_error( $parent_term ) ) {
+						$parent_slug = $parent_term->slug;
+					}
+				}
+				$list[] = array(
+					'id'          => intval( $term->term_id ),
+					'name'        => $term->name,
+					'slug'        => $term->slug,
+					'description' => $term->description,
+					'parent'      => $parent_slug,
+				);
+			}
+		}
+
+		$content = self::format_yaml_list( 'categories', $list ) . "\n# WordPress Categories Master Reference\n";
+
+		return $content;
+	}
+
+	private static function format_yaml_list( $key, array $items ) {
+		$yaml = "---\n" . $key . ":\n";
+		foreach ( $items as $item ) {
+			$first = true;
+			foreach ( $item as $k => $v ) {
+				$val_str = wp_json_encode( (string) $v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+				if ( $first ) {
+					$yaml .= '  - ' . $k . ': ' . $val_str . "\n";
+					$first = false;
+				} else {
+					$yaml .= '    ' . $k . ': ' . $val_str . "\n";
+				}
+			}
+		}
+		$yaml .= "---\n";
+
+		return $yaml;
+	}
+
+	private static function export_tags_markdown() {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'post_tag',
+				'hide_empty' => false,
+				'orderby'    => 'name',
+				'order'      => 'ASC',
+			)
+		);
+		$list  = array();
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$list[] = array(
+					'id'          => intval( $term->term_id ),
+					'name'        => $term->name,
+					'slug'        => $term->slug,
+					'description' => $term->description,
+				);
+			}
+		}
+
+		$content = self::format_yaml_list( 'tags', $list ) . "\n# WordPress Tags Master Reference\n";
+
+		return $content;
+	}
+
+	private static function user_can_edit_any_supported_post_type( $user ) {
+		$post_types = self::get_supported_post_types();
+		foreach ( $post_types as $post_type ) {
+			$pt_obj = get_post_type_object( $post_type );
+			$cap    = ( $pt_obj && isset( $pt_obj->cap->edit_posts ) ) ? $pt_obj->cap->edit_posts : 'edit_posts';
+			if ( user_can( $user, $cap ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static function export_authors_markdown() {
+		$users = get_users(
+			array(
+				'orderby' => 'user_login',
+				'order'   => 'ASC',
+			)
+		);
+		$list  = array();
+		if ( is_array( $users ) ) {
+			foreach ( $users as $user ) {
+				if ( ! self::user_can_edit_any_supported_post_type( $user ) ) {
+					continue;
+				}
+				$author_data = array(
+					'user_login'    => $user->user_login,
+					'display_name'  => $user->display_name,
+					'first_name'    => get_user_meta( $user->ID, 'first_name', true ),
+					'last_name'     => get_user_meta( $user->ID, 'last_name', true ),
+					'user_email'    => $user->user_email,
+					'user_nicename' => $user->user_nicename,
+					'description'   => get_user_meta( $user->ID, 'description', true ),
+				);
+				$author_data = apply_filters( 'push_md_export_author', $author_data, $user );
+				$list[]      = $author_data;
+			}
+		}
+
+		$content = self::format_yaml_list( 'authors', $list ) . "\n# WordPress Authors Master Reference\n";
+
+		return $content;
+	}
+
+	private static function assert_can_sync_authors( $markdown ) {
+		$data = self::parse_master_file_data( $markdown, 'authors' );
+		if ( ! is_array( $data ) ) {
+			return;
+		}
+
+		$current_user_id = get_current_user_id();
+
+		foreach ( $data as $item ) {
+			if ( ! is_array( $item ) || empty( $item['user_login'] ) ) {
+				continue;
+			}
+			$login = (string) $item['user_login'];
+			$user  = get_user_by( 'login', $login );
+			if ( ! $user ) {
+				$user = get_user_by( 'slug', $login );
+			}
+			if ( ! $user ) {
+				throw new Exception( sprintf( 'Push rejected because author "%s" was not found in WordPress.', esc_html( $login ) ) );
+			}
+
+			$can_edit = ( $current_user_id && (int) $current_user_id === (int) $user->ID )
+						|| current_user_can( 'edit_users' )
+						|| current_user_can( 'edit_user', $user->ID );
+
+			if ( ! $can_edit ) {
+				throw new Exception( sprintf( 'Push rejected because you do not have permission to edit author "%s".', esc_html( $login ) ) );
+			}
+		}
+	}
+
+	private static function assert_can_sync_terms( $taxonomy ) {
+		$tax_obj = get_taxonomy( $taxonomy );
+		$cap     = ( $tax_obj && isset( $tax_obj->cap->manage_terms ) ) ? $tax_obj->cap->manage_terms : 'manage_categories';
+		if ( ! current_user_can( $cap ) ) {
+			throw new Exception( sprintf( 'Push rejected because you do not have permission to manage %s.', esc_html( $taxonomy ) ) );
+		}
+	}
+
+	private static function upsert_master_metadata_from_markdown( $path, $markdown, $options = array() ) {
+		$clean_path = ltrim( $path, '/' );
+
+		if ( 'authors.md' === $clean_path ) {
+			self::assert_can_sync_authors( $markdown );
+		} elseif ( 'categories.md' === $clean_path ) {
+			self::assert_can_sync_terms( 'category' );
+		} elseif ( 'tags.md' === $clean_path ) {
+			self::assert_can_sync_terms( 'post_tag' );
+		}
+
+		if ( ! empty( $options['dry_run'] ) ) {
+			return array(
+				'post_id' => 0,
+				'change'  => null,
+			);
+		}
+
+		if ( 'categories.md' === $clean_path ) {
+			self::sync_categories_from_markdown( $markdown );
+		} elseif ( 'tags.md' === $clean_path ) {
+			self::sync_tags_from_markdown( $markdown );
+		} elseif ( 'authors.md' === $clean_path ) {
+			self::sync_authors_from_markdown( $markdown );
+		}
+
+		return array(
+			'post_id' => 0,
+			'change'  => null,
+		);
+	}
+
+	private static function sync_categories_from_markdown( $markdown ) {
+		$data = self::parse_master_file_data( $markdown, 'categories' );
+		if ( ! is_array( $data ) ) {
+			return;
+		}
+
+		$processed_term_ids = array();
+
+		foreach ( $data as $item ) {
+			if ( ! is_array( $item ) || empty( $item['name'] ) ) {
+				continue;
+			}
+			$name        = (string) $item['name'];
+			$slug        = ! empty( $item['slug'] ) ? (string) $item['slug'] : sanitize_title( $name );
+			$description = isset( $item['description'] ) ? (string) $item['description'] : '';
+			$parent_slug = isset( $item['parent'] ) ? trim( (string) $item['parent'] ) : '';
+
+			$parent_id = 0;
+			if ( '' !== $parent_slug ) {
+				$parent_term = false;
+				if ( is_numeric( $parent_slug ) ) {
+					$parent_term = get_term( intval( $parent_slug ), 'category' );
+					if ( is_wp_error( $parent_term ) || ! $parent_term ) {
+						$parent_term = false;
+					}
+				}
+				if ( ! $parent_term ) {
+					$parent_term = get_term_by( 'slug', $parent_slug, 'category' );
+				}
+				if ( ! $parent_term ) {
+					$parent_term = get_term_by( 'name', $parent_slug, 'category' );
+				}
+				if ( $parent_term && ! is_wp_error( $parent_term ) ) {
+					$parent_id = $parent_term->term_id;
+				}
+			}
+
+			$existing = false;
+			if ( ! empty( $item['id'] ) ) {
+				$existing = get_term( intval( $item['id'] ), 'category' );
+				if ( is_wp_error( $existing ) || ! $existing ) {
+					$existing = false;
+				}
+			}
+			if ( ! $existing ) {
+				$existing = get_term_by( 'slug', $slug, 'category' );
+			}
+			if ( ! $existing ) {
+				$existing = get_term_by( 'name', $name, 'category' );
+			}
+
+			if ( $existing && ! is_wp_error( $existing ) ) {
+				$updated = wp_update_term(
+					$existing->term_id,
+					'category',
+					array(
+						'name'        => $name,
+						'slug'        => $slug,
+						'description' => $description,
+						'parent'      => $parent_id,
+					)
+				);
+				if ( is_array( $updated ) && isset( $updated['term_id'] ) ) {
+					$processed_term_ids[] = intval( $updated['term_id'] );
+				} else {
+					$processed_term_ids[] = intval( $existing->term_id );
+				}
+			} else {
+				$created = wp_insert_term(
+					$name,
+					'category',
+					array(
+						'slug'        => $slug,
+						'description' => $description,
+						'parent'      => $parent_id,
+					)
+				);
+				if ( is_array( $created ) && isset( $created['term_id'] ) ) {
+					$processed_term_ids[] = intval( $created['term_id'] );
+				}
+			}
+		}
+
+		$all_terms      = get_terms(
+			array(
+				'taxonomy'   => 'category',
+				'hide_empty' => false,
+			)
+		);
+		$default_cat_id = (int) get_option( 'default_category', 1 );
+		if ( is_array( $all_terms ) ) {
+			foreach ( $all_terms as $term ) {
+				if ( is_object( $term ) && ! in_array( intval( $term->term_id ), $processed_term_ids, true ) ) {
+					if ( intval( $term->term_id ) !== $default_cat_id && 'uncategorized' !== strtolower( $term->slug ) ) {
+						wp_delete_term( $term->term_id, 'category' );
+					}
+				}
+			}
+		}
+	}
+
+	private static function sync_tags_from_markdown( $markdown ) {
+		$data = self::parse_master_file_data( $markdown, 'tags' );
+		if ( ! is_array( $data ) ) {
+			return;
+		}
+
+		$processed_term_ids = array();
+
+		foreach ( $data as $item ) {
+			if ( ! is_array( $item ) || empty( $item['name'] ) ) {
+				continue;
+			}
+			$name        = (string) $item['name'];
+			$slug        = ! empty( $item['slug'] ) ? (string) $item['slug'] : sanitize_title( $name );
+			$description = isset( $item['description'] ) ? (string) $item['description'] : '';
+
+			$existing = false;
+			if ( ! empty( $item['id'] ) ) {
+				$existing = get_term( intval( $item['id'] ), 'post_tag' );
+				if ( is_wp_error( $existing ) || ! $existing ) {
+					$existing = false;
+				}
+			}
+			if ( ! $existing ) {
+				$existing = get_term_by( 'slug', $slug, 'post_tag' );
+			}
+			if ( ! $existing ) {
+				$existing = get_term_by( 'name', $name, 'post_tag' );
+			}
+
+			if ( $existing && ! is_wp_error( $existing ) ) {
+				$updated = wp_update_term(
+					$existing->term_id,
+					'post_tag',
+					array(
+						'name'        => $name,
+						'slug'        => $slug,
+						'description' => $description,
+					)
+				);
+				if ( is_array( $updated ) && isset( $updated['term_id'] ) ) {
+					$processed_term_ids[] = intval( $updated['term_id'] );
+				} else {
+					$processed_term_ids[] = intval( $existing->term_id );
+				}
+			} else {
+				$created = wp_insert_term(
+					$name,
+					'post_tag',
+					array(
+						'slug'        => $slug,
+						'description' => $description,
+					)
+				);
+				if ( is_array( $created ) && isset( $created['term_id'] ) ) {
+					$processed_term_ids[] = intval( $created['term_id'] );
+				}
+			}
+		}
+
+		$all_terms = get_terms(
+			array(
+				'taxonomy'   => 'post_tag',
+				'hide_empty' => false,
+			)
+		);
+		if ( is_array( $all_terms ) ) {
+			foreach ( $all_terms as $term ) {
+				if ( is_object( $term ) && ! in_array( intval( $term->term_id ), $processed_term_ids, true ) ) {
+					wp_delete_term( $term->term_id, 'post_tag' );
+				}
+			}
+		}
+	}
+
+	private static function sync_authors_from_markdown( $markdown ) {
+		$data = self::parse_master_file_data( $markdown, 'authors' );
+		if ( ! is_array( $data ) ) {
+			return;
+		}
+
+		foreach ( $data as $item ) {
+			if ( ! is_array( $item ) || empty( $item['user_login'] ) ) {
+				continue;
+			}
+			$login = (string) $item['user_login'];
+			$user  = get_user_by( 'login', $login );
+			if ( ! $user ) {
+				$user = get_user_by( 'slug', $login );
+			}
+			if ( ! $user ) {
+				continue;
+			}
+
+			$userdata = array(
+				'ID' => $user->ID,
+			);
+			if ( isset( $item['display_name'] ) ) {
+				$userdata['display_name'] = (string) $item['display_name'];
+			}
+			if ( isset( $item['first_name'] ) ) {
+				$userdata['first_name'] = (string) $item['first_name'];
+			}
+			if ( isset( $item['last_name'] ) ) {
+				$userdata['last_name'] = (string) $item['last_name'];
+			}
+			if ( isset( $item['user_email'] ) && is_email( $item['user_email'] ) ) {
+				$userdata['user_email'] = (string) $item['user_email'];
+			}
+			if ( isset( $item['description'] ) ) {
+				$userdata['description'] = (string) $item['description'];
+			}
+
+			wp_update_user( $userdata );
+			do_action( 'push_md_import_author', $user->ID, $item );
+		}
+	}
+
+	private static function parse_master_file_data( $markdown, $key ) {
+		self::assert_markdown_front_matter_is_closed( $markdown );
+		$lines = preg_split( "/\r\n|\n|\r/", $markdown );
+		if ( empty( $lines ) || '---' !== trim( $lines[0] ) ) {
+			return array();
+		}
+
+		$yaml_lines = array();
+		$count      = count( $lines );
+		for ( $i = 1; $i < $count; $i++ ) {
+			if ( '---' === trim( $lines[ $i ] ) ) {
+				break;
+			}
+			$yaml_lines[] = $lines[ $i ];
+		}
+
+		$items        = array();
+		$current_item = null;
+		$in_key       = false;
+
+		foreach ( $yaml_lines as $line ) {
+			$trimmed = trim( $line );
+			if ( '' === $trimmed ) {
+				continue;
+			}
+			if ( preg_match( '/^' . preg_quote( $key, '/' ) . '\s*:/', $trimmed ) ) {
+				$in_key = true;
+				continue;
+			}
+			if ( ! $in_key ) {
+				continue;
+			}
+
+			if ( preg_match( '/^\s*-\s*([A-Za-z0-9_]+)\s*:\s*(.*)$/', $line, $m ) ) {
+				if ( null !== $current_item ) {
+					$items[] = $current_item;
+				}
+				$current_item       = array();
+				$k                  = $m[1];
+				$v                  = trim( $m[2] );
+				$current_item[ $k ] = self::decode_yaml_value( $v );
+			} elseif ( null !== $current_item && preg_match( '/^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$/', $line, $m ) ) {
+				$k                  = $m[1];
+				$v                  = trim( $m[2] );
+				$current_item[ $k ] = self::decode_yaml_value( $v );
+			}
+		}
+
+		if ( null !== $current_item ) {
+			$items[] = $current_item;
+		}
+
+		return $items;
+	}
+
+	private static function decode_yaml_value( $val ) {
+		$val = trim( $val );
+		if ( '' === $val ) {
+			return '';
+		}
+		$len = strlen( $val );
+		if ( ( '"' === $val[0] && '"' === $val[ $len - 1 ] ) || ( "'" === $val[0] && "'" === $val[ $len - 1 ] ) ) {
+			$decoded = json_decode( $val, true );
+			if ( null !== $decoded ) {
+				return $decoded;
+			}
+
+			return trim( $val, "'\"" );
+		}
+
+		return $val;
+	}
+
+	private static function validate_post_frontmatter_references( $metadata, $post_type ) {
+		unset( $post_type );
+
+		if ( isset( $metadata['author'] ) && '' !== trim( (string) $metadata['author'] ) ) {
+			$author_id = self::resolve_frontmatter_author_id( $metadata['author'] );
+			if ( 0 === $author_id ) {
+				throw new Exception( sprintf( 'Push rejected because author "%s" was not found in WordPress.', esc_html( (string) $metadata['author'] ) ) );
+			}
+		}
+
+		if ( isset( $metadata['categories'] ) && ! empty( $metadata['categories'] ) ) {
+			$cat_list = self::parse_frontmatter_list( $metadata['categories'] );
+			foreach ( $cat_list as $cat_path ) {
+				if ( '' === $cat_path ) {
+					continue;
+				}
+				$term_id = self::resolve_category_path_to_term_id( $cat_path );
+				if ( 0 === $term_id ) {
+					throw new Exception( sprintf( 'Push rejected because category "%s" was not found in categories.md or WordPress.', esc_html( $cat_path ) ) );
+				}
+			}
+		}
+
+		if ( isset( $metadata['tags'] ) && ! empty( $metadata['tags'] ) ) {
+			$tag_list = self::parse_frontmatter_list( $metadata['tags'] );
+			foreach ( $tag_list as $tag_name ) {
+				if ( '' === $tag_name ) {
+					continue;
+				}
+				$term_id = self::resolve_tag_name_to_term_id( $tag_name );
+				if ( 0 === $term_id ) {
+					throw new Exception( sprintf( 'Push rejected because tag "%s" was not found in tags.md or WordPress.', esc_html( $tag_name ) ) );
+				}
+			}
+		}
+
+		if ( isset( $metadata['featured_image'] ) && '' !== trim( (string) $metadata['featured_image'] ) ) {
+			$img_id = self::resolve_featured_image_id( $metadata['featured_image'] );
+			if ( 0 === $img_id ) {
+				throw new Exception( sprintf( 'Push rejected because featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ) );
+			}
+		}
+	}
+
+	private static function get_category_path_string( $term ) {
+		if ( ! $term || is_wp_error( $term ) ) {
+			return '';
+		}
+
+		$names     = array( $term->name );
+		$ancestors = get_ancestors( $term->term_id, 'category', 'taxonomy' );
+		if ( is_array( $ancestors ) ) {
+			foreach ( $ancestors as $ancestor_id ) {
+				$parent_term = get_term( $ancestor_id, 'category' );
+				if ( $parent_term && ! is_wp_error( $parent_term ) ) {
+					array_unshift( $names, $parent_term->name );
+				}
+			}
+		}
+
+		return implode( ' > ', $names );
+	}
+
+	private static function resolve_term_by_name_or_slug( $name_or_slug, $taxonomy, $parent_id = null ) {
+		$name_or_slug = trim( (string) $name_or_slug );
+		if ( '' === $name_or_slug ) {
+			return 0;
+		}
+
+		$term = get_term_by( 'name', $name_or_slug, $taxonomy );
+		if ( ! $term ) {
+			$term = get_term_by( 'slug', $name_or_slug, $taxonomy );
+		}
+		if ( $term && ! is_wp_error( $term ) ) {
+			if ( null === $parent_id || intval( $term->parent ) === intval( $parent_id ) ) {
+				return (int) $term->term_id;
+			}
+		}
+
+		$args = array(
+			'taxonomy'   => $taxonomy,
+			'hide_empty' => false,
+		);
+		if ( null !== $parent_id ) {
+			$args['parent'] = intval( $parent_id );
+		}
+
+		$terms = get_terms( $args );
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $t ) {
+				if ( 0 === strcasecmp( $t->name, $name_or_slug ) || 0 === strcasecmp( $t->slug, $name_or_slug ) ) {
+					return (int) $t->term_id;
+				}
+			}
+		}
+
+		return 0;
+	}
+
+	private static function resolve_category_path_to_term_id( $path_str ) {
+		$path_str = trim( (string) $path_str );
+		if ( '' === $path_str ) {
+			return 0;
+		}
+
+		$parts     = array_map( 'trim', explode( '>', $path_str ) );
+		$parent_id = 0;
+
+		foreach ( $parts as $part ) {
+			$term_id = self::resolve_term_by_name_or_slug( $part, 'category', $parent_id );
+			if ( 0 === $term_id ) {
+				$term_id = self::resolve_term_by_name_or_slug( $part, 'category' );
+			}
+			if ( 0 === $term_id ) {
+				return 0;
+			}
+			$parent_id = $term_id;
+		}
+
+		return $parent_id;
+	}
+
+	private static function resolve_tag_name_to_term_id( $tag_name ) {
+		return self::resolve_term_by_name_or_slug( $tag_name, 'post_tag' );
+	}
+
+	private static function resolve_frontmatter_author_id( $author_val ) {
+		$author_val = trim( (string) $author_val );
+		if ( '' === $author_val ) {
+			return 0;
+		}
+
+		$user = get_user_by( 'login', $author_val );
+		if ( ! $user ) {
+			$user = get_user_by( 'slug', $author_val );
+		}
+		if ( ! $user && is_numeric( $author_val ) ) {
+			$user = get_userdata( (int) $author_val );
+		}
+		if ( ! $user ) {
+			$users = get_users();
+			if ( is_array( $users ) ) {
+				foreach ( $users as $u ) {
+					if ( 0 === strcasecmp( $u->display_name, $author_val ) || 0 === strcasecmp( $u->user_login, $author_val ) ) {
+						return $u->ID;
+					}
+				}
+			}
+		}
+
+		return ( $user && ! is_wp_error( $user ) ) ? $user->ID : 0;
+	}
+
+	private static function resolve_featured_image_id( $img_val ) {
+		$img_val = trim( (string) $img_val );
+		if ( '' === $img_val ) {
+			return 0;
+		}
+
+		if ( is_numeric( $img_val ) ) {
+			$post = get_post( (int) $img_val );
+			return ( $post && 'attachment' === $post->post_type ) ? (int) $img_val : 0;
+		}
+
+		$attachment_id = attachment_url_to_postid( $img_val );
+		if ( $attachment_id ) {
+			return $attachment_id;
+		}
+
+		return 0;
+	}
+
+	private static function parse_frontmatter_list( $val ) {
+		if ( is_array( $val ) ) {
+			return array_map( 'trim', array_map( 'strval', $val ) );
+		}
+
+		$val = trim( (string) $val );
+		if ( '' === $val ) {
+			return array();
+		}
+
+		if ( 0 === strpos( $val, '[' ) && ']' === substr( $val, -1 ) ) {
+			$decoded = json_decode( $val, true );
+			if ( is_array( $decoded ) ) {
+				return array_map( 'trim', array_map( 'strval', $decoded ) );
+			}
+		}
+
+		return array_map( 'trim', explode( ',', $val ) );
+	}
+
+	private static function assign_post_categories( $post_id, $categories_val ) {
+		$cat_list = self::parse_frontmatter_list( $categories_val );
+		$term_ids = array();
+		foreach ( $cat_list as $cat_path ) {
+			if ( '' === $cat_path ) {
+				continue;
+			}
+			$term_id = self::resolve_category_path_to_term_id( $cat_path );
+			if ( $term_id > 0 ) {
+				$term_ids[] = $term_id;
+			}
+		}
+		wp_set_object_terms( $post_id, array_unique( $term_ids ), 'category' );
+	}
+
+	private static function assign_post_tags( $post_id, $tags_val ) {
+		$tag_list = self::parse_frontmatter_list( $tags_val );
+		wp_set_post_tags( $post_id, $tag_list, false );
+	}
+
+	private static function assign_post_featured_image( $post_id, $img_val ) {
+		$img_id = self::resolve_featured_image_id( $img_val );
+		if ( $img_id > 0 ) {
+			set_post_thumbnail( $post_id, $img_id );
+		} else {
+			delete_post_thumbnail( $post_id );
+		}
+	}
+
+	private static function is_yoast_seo_active() {
+		return defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Options' ) || defined( 'WPSEO_FILE' );
+	}
+
+	private static function is_rank_math_active() {
+		return defined( 'RANK_MATH_VERSION' ) || class_exists( 'RankMath' );
+	}
+
+	public static function add_seo_supported_frontmatter_keys( $keys ) {
+		$seo_keys = array(
+			'seo_title',
+			'seo_description',
+			'seo_focus_keyword',
+			'seo_keywords',
+		);
+		if ( ! is_array( $keys ) ) {
+			return $seo_keys;
+		}
+
+		return array_values( array_unique( array_merge( $keys, $seo_keys ) ) );
+	}
+
+	public static function handle_seo_export_frontmatter( $metadata, $post ) {
+		if ( ! is_array( $metadata ) || ! $post instanceof WP_Post ) {
+			return $metadata;
+		}
+
+		$seo_title = self::get_post_seo_meta( $post->ID, 'title' );
+		if ( '' !== $seo_title ) {
+			$metadata['seo_title'] = array( $seo_title );
+		}
+
+		$seo_desc = self::get_post_seo_meta( $post->ID, 'description' );
+		if ( '' !== $seo_desc ) {
+			$metadata['seo_description'] = array( $seo_desc );
+		}
+
+		$seo_kw = self::get_post_seo_meta( $post->ID, 'focus_keyword' );
+		if ( '' !== $seo_kw ) {
+			$metadata['seo_focus_keyword'] = array( $seo_kw );
+		}
+
+		return $metadata;
+	}
+
+	public static function handle_seo_import_frontmatter( $post_id, $metadata, $postarr, $existing_post ) {
+		unset( $postarr, $existing_post );
+
+		if ( ! is_array( $metadata ) || $post_id <= 0 ) {
+			return;
+		}
+
+		if ( isset( $metadata['seo_title'] ) ) {
+			self::update_post_seo_meta( $post_id, 'title', $metadata['seo_title'] );
+		}
+
+		if ( isset( $metadata['seo_description'] ) ) {
+			self::update_post_seo_meta( $post_id, 'description', $metadata['seo_description'] );
+		}
+
+		if ( isset( $metadata['seo_focus_keyword'] ) ) {
+			self::update_post_seo_meta( $post_id, 'focus_keyword', $metadata['seo_focus_keyword'] );
+		} elseif ( isset( $metadata['seo_keywords'] ) ) {
+			self::update_post_seo_meta( $post_id, 'focus_keyword', $metadata['seo_keywords'] );
+		}
+	}
+
+	private static function get_post_seo_meta( $post_id, $field ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return '';
+		}
+
+		$yoast_key = '';
+		$rm_key    = '';
+		if ( 'title' === $field ) {
+			$yoast_key = '_yoast_wpseo_title';
+			$rm_key    = 'rank_math_title';
+		} elseif ( 'description' === $field ) {
+			$yoast_key = '_yoast_wpseo_metadesc';
+			$rm_key    = 'rank_math_description';
+		} elseif ( 'focus_keyword' === $field ) {
+			$yoast_key = '_yoast_wpseo_focuskw';
+			$rm_key    = 'rank_math_focus_keyword';
+		} else {
+			return '';
+		}
+
+		$yoast_active = self::is_yoast_seo_active();
+		$rm_active    = self::is_rank_math_active();
+
+		if ( $yoast_active && ! $rm_active ) {
+			$val = get_post_meta( $post_id, $yoast_key, true );
+			if ( '' !== trim( (string) $val ) ) {
+				return trim( (string) $val );
+			}
+		}
+
+		if ( $rm_active && ! $yoast_active ) {
+			$val = get_post_meta( $post_id, $rm_key, true );
+			if ( '' !== trim( (string) $val ) ) {
+				return trim( (string) $val );
+			}
+		}
+
+		$val = get_post_meta( $post_id, $yoast_key, true );
+		if ( '' !== trim( (string) $val ) ) {
+			return trim( (string) $val );
+		}
+
+		$val = get_post_meta( $post_id, $rm_key, true );
+		if ( '' !== trim( (string) $val ) ) {
+			return trim( (string) $val );
+		}
+
+		return '';
+	}
+
+	private static function update_post_seo_meta( $post_id, $field, $val ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return;
+		}
+
+		$val = is_array( $val ) ? reset( $val ) : $val;
+		$val = trim( (string) $val );
+
+		$yoast_key = '';
+		$rm_key    = '';
+		if ( 'title' === $field ) {
+			$yoast_key = '_yoast_wpseo_title';
+			$rm_key    = 'rank_math_title';
+		} elseif ( 'description' === $field ) {
+			$yoast_key = '_yoast_wpseo_metadesc';
+			$rm_key    = 'rank_math_description';
+		} elseif ( 'focus_keyword' === $field ) {
+			$yoast_key = '_yoast_wpseo_focuskw';
+			$rm_key    = 'rank_math_focus_keyword';
+		} else {
+			return;
+		}
+
+		$yoast_active = self::is_yoast_seo_active();
+		$rm_active    = self::is_rank_math_active();
+
+		if ( $yoast_active ) {
+			update_post_meta( $post_id, $yoast_key, $val );
+		}
+		if ( $rm_active ) {
+			update_post_meta( $post_id, $rm_key, $val );
+		}
+
+		if ( ! $yoast_active && ! $rm_active ) {
+			update_post_meta( $post_id, $yoast_key, $val );
+			update_post_meta( $post_id, $rm_key, $val );
+		}
 	}
 
 	public static function throw_on_php_warning( $severity, $message, $file, $line ) {
