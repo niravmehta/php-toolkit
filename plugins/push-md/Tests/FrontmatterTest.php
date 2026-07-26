@@ -571,6 +571,9 @@ if ( ! function_exists( 'wp_list_pluck' ) ) {
 	}
 }
 
+require_once dirname( __DIR__ ) . '/class-push-md-html-converter.php';
+require_once dirname( __DIR__ ) . '/class-push-md-markdown-producer.php';
+require_once dirname( __DIR__ ) . '/class-push-md-markdown-consumer.php';
 require_once dirname( __DIR__ ) . '/class-push-md-plugin.php';
 
 class FrontmatterTest extends TestCase {
