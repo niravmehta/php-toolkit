@@ -4879,66 +4879,115 @@ class Push_MD_Plugin {
 	}
 
 	private static function add_gitignore_file( &$files ) {
+		/**
+		 * Filters whether to include a default .gitignore file in the Push MD repository export.
+		 *
+		 * @param bool $export_gitignore Whether to export .gitignore. Default true.
+		 */
+		if ( ! apply_filters( 'push_md_export_gitignore', true ) ) {
+			return;
+		}
+
+		$content = self::get_default_gitignore_content();
+
+		/**
+		 * Filters the final content of the exported .gitignore file.
+		 *
+		 * @param string $content The .gitignore file content.
+		 */
+		$content = apply_filters( 'push_md_gitignore_content', $content );
+
 		$files['.gitignore'] = array(
 			'post'    => null,
 			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => self::get_default_gitignore_content(),
+			'content' => $content,
 		);
 	}
 
 	private static function get_default_gitignore_content() {
-		return implode(
-			"\n",
-			array(
-				'# Ignore everything by default',
-				'*',
-				'',
-				'# Allow directories so Git can traverse into them',
-				'!*/',
-				'',
-				'# Root files',
-				'!.gitignore',
-				'!AGENTS.md',
-				'!CLAUDE.md',
-				'!categories.md',
-				'!tags.md',
-				'!authors.md',
-				'',
-				'# Guidance directories',
-				'!.agents/',
-				'!.agents/**',
-				'!.claude/',
-				'!.claude/**',
-				'',
-				'# Posts and Pages',
-				'!post/',
-				'!post/*.md',
-				'!page/',
-				'!page/**/*.md',
-				'',
-				'# Gutenberg Block Templates and Template Parts',
-				'!wp_template/',
-				'!wp_template/**/*.html',
-				'!wp_template_part/',
-				'!wp_template_part/**/*.html',
-				'!wp_navigation/',
-				'!wp_navigation/*.html',
-				'',
-				'# Theme JSON and Global Styles',
-				'!wp_theme/',
-				'!wp_theme/**/*.json',
-				'!wp_global_styles/',
-				'!wp_global_styles/*.json',
-				'',
-				'# Guidelines',
-				'!wp_guideline/',
-				'!wp_guideline/**',
-				'',
-			)
+		$rules = array(
+			'# Ignore everything by default',
+			'*',
+			'',
+			'# Allow directories so Git can traverse into them',
+			'!*/',
+			'',
+			'# Root files',
+			'!.gitignore',
+			'!AGENTS.md',
+			'!CLAUDE.md',
+			'!categories.md',
+			'!tags.md',
+			'!authors.md',
+			'',
+			'# Guidance directories',
+			'!.agents/',
+			'!.agents/**',
+			'!.claude/',
+			'!.claude/**',
+		);
+
+		$post_type_rules = array();
+		foreach ( self::get_supported_post_types() as $post_type ) {
+			foreach ( self::get_post_type_gitignore_patterns( $post_type ) as $pattern ) {
+				$post_type_rules[] = $pattern;
+			}
+		}
+
+		if ( ! empty( $post_type_rules ) ) {
+			$rules[] = '';
+			$rules[] = '# Supported content paths (dynamically generated)';
+			foreach ( array_unique( $post_type_rules ) as $rule ) {
+				$rules[] = $rule;
+			}
+		}
+
+		$rules[] = '';
+		$rules[] = '# Read-only theme context';
+		$rules[] = '!wp_theme/';
+		$rules[] = '!wp_theme/**/*.json';
+
+		/**
+		 * Filters the array of rules included in the default .gitignore file.
+		 *
+		 * @param array $rules Array of rule lines.
+		 */
+		$rules = apply_filters( 'push_md_gitignore_rules', $rules );
+		$rules = is_array( $rules ) ? $rules : array();
+
+		return implode( "\n", $rules ) . "\n";
+	}
+
+	private static function get_post_type_gitignore_patterns( $post_type ) {
+		if ( 'wp_guideline' === $post_type ) {
+			return array( '!wp_guideline/', '!wp_guideline/**' );
+		}
+
+		if ( 'wp_global_styles' === $post_type ) {
+			return array( '!wp_global_styles/', '!wp_global_styles/*.json' );
+		}
+
+		if ( self::is_theme_scoped_raw_block_post_type( $post_type ) ) {
+			return array( '!' . $post_type . '/', '!' . $post_type . '/**/*.html' );
+		}
+
+		if ( 'wp_navigation' === $post_type ) {
+			return array( '!wp_navigation/', '!wp_navigation/*.html' );
+		}
+
+		$is_hierarchical = 'page' === $post_type || ( function_exists( 'is_post_type_hierarchical' ) && is_post_type_hierarchical( $post_type ) );
+
+		return array(
+			'!' . $post_type . '/',
+			$is_hierarchical ? '!' . $post_type . '/**/*.md' : '!' . $post_type . '/*.md',
 		);
 	}
 
 	private static function reject_gitignore_file_changes( $old_files, $new_files ) {
+		if ( ! apply_filters( 'push_md_export_gitignore', true ) ) {
+			return;
+		}
+
 		foreach ( $new_files as $path => $entry ) {
 			if ( ! self::is_gitignore_path( $path ) ) {
 				continue;
