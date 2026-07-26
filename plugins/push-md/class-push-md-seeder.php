@@ -383,6 +383,7 @@ class Push_MD_Seeder {
 
 	private static function get_checkout_preview_priority_paths() {
 		return array(
+			'.gitignore',
 			'.agents/skills',
 			'.claude/skills',
 			'AGENTS.md',
@@ -492,7 +493,7 @@ class Push_MD_Seeder {
 			return true;
 		}
 
-		return in_array( $path, array( 'AGENTS.md', 'CLAUDE.md' ), true );
+		return in_array( $path, array( '.gitignore', 'AGENTS.md', 'CLAUDE.md' ), true );
 	}
 
 	private static function trim_checkout_preview_content( $content, $max_length ) {
