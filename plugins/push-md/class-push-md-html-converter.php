@@ -341,8 +341,128 @@ class Push_MD_HTML_Converter {
 
 		// Normalize: collapse 3+ consecutive newlines to a single blank line.
 		$output = preg_replace( "/\n{3,}/", "\n\n", $output );
+		$output = self::normalize_markdown( $output );
 
 		return $output;
+	}
+
+	/**
+	 * Normalize a Markdown string to fix common formatting and validation issues:
+	 * 1. Convert non-breaking spaces (\u{00A0}, &nbsp;) to standard spaces.
+	 * 2. Shift leading/trailing spaces inside inline formatting delimiters (***, **, *, ~~, `) outside the delimiters
+	 *    (e.g., "**Ask questions **" -> "**Ask questions** ").
+	 * 3. Remove space before punctuation directly following formatting delimiters.
+	 * 4. Preserve fenced code blocks without altering code within them.
+	 *
+	 * @param string $markdown Markdown text.
+	 * @return string Normalized Markdown text.
+	 */
+	public static function normalize_markdown( $markdown ) {
+		if ( '' === $markdown ) {
+			return '';
+		}
+
+		// Replace non-breaking spaces and &nbsp; with regular space.
+		$markdown = str_replace( array( "\xC2\xA0", "\u{00A0}", '&nbsp;' ), ' ', $markdown );
+
+		// Preserve fenced code blocks (```...```) by splitting and only normalizing non-code parts.
+		$parts = preg_split( '/(```[\s\S]*?```)/u', $markdown, -1, PREG_SPLIT_DELIM_CAPTURE );
+		if ( false === $parts ) {
+			return self::normalize_inline_delimiters( $markdown );
+		}
+
+		foreach ( $parts as $i => $part ) {
+			// Skip odd parts (fenced code blocks).
+			if ( 1 === $i % 2 ) {
+				continue;
+			}
+			$parts[ $i ] = self::normalize_inline_delimiters( $part );
+		}
+
+		return implode( '', $parts );
+	}
+
+	/**
+	 * Inner helper to normalize inline formatting delimiter spaces.
+	 *
+	 * @param string $text Markdown fragment outside code blocks.
+	 * @return string Normalized fragment.
+	 */
+	private static function normalize_inline_delimiters( $text ) {
+		// 1. Triple asterisks *** (bold italic)
+		$text = preg_replace_callback(
+			'/\*\*\*([^\*\r\n]+?)\*\*\*/u',
+			function ( $matches ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $inner;
+				}
+				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
+				return $m[1] . '***' . $m[2] . '***' . $m[3];
+			},
+			$text
+		);
+
+		// 2. Double asterisks ** (bold)
+		$text = preg_replace_callback(
+			'/\*\*([^\*\r\n]+?)\*\*/u',
+			function ( $matches ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $inner;
+				}
+				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
+				return $m[1] . '**' . $m[2] . '**' . $m[3];
+			},
+			$text
+		);
+
+		// 3. Single asterisk * (italic)
+		$text = preg_replace_callback(
+			'/(?<!\*)\*([^\*\r\n]+?)\*(?!\*)/u',
+			function ( $matches ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $inner;
+				}
+				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
+				return $m[1] . '*' . $m[2] . '*' . $m[3];
+			},
+			$text
+		);
+
+		// 4. Strikethrough ~~
+		$text = preg_replace_callback(
+			'/(?<!~)~~([^~\r\n]+?)~~(?!~)/u',
+			function ( $matches ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $inner;
+				}
+				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
+				return $m[1] . '~~' . $m[2] . '~~' . $m[3];
+			},
+			$text
+		);
+
+		// 5. Inline code `
+		$text = preg_replace_callback(
+			'/(?<!`)`([^`\r\n]+?)`(?!`)/u',
+			function ( $matches ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $inner;
+				}
+				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
+				return $m[1] . '`' . $m[2] . '`' . $m[3];
+			},
+			$text
+		);
+
+		// 6. Clean up trailing space before punctuation directly following delimiters.
+		$text = preg_replace( '/(\*\*|\*|~~|`)[ \t]+([.,?!;:])/u', '$1$2', $text );
+
+		return $text;
 	}
 
 	/**

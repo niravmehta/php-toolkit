@@ -51,9 +51,9 @@ class Push_MD_Markdown_Producer {
 		$content = $this->blocks_with_meta->get_block_markup();
 
 		if ( $this->content_has_blocks( $content ) ) {
-			// Gutenberg content: delegate entirely to MarkdownProducer.
+			// Gutenberg content: delegate to MarkdownProducer and normalize output.
 			$producer       = new MarkdownProducer( $this->blocks_with_meta );
-			$this->markdown = $producer->produce();
+			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
 		} else {
 			// Standard HTML or plain-text content.
 			$metadata       = $this->blocks_with_meta->get_all_metadata( array( 'first_value_only' => true ) );
