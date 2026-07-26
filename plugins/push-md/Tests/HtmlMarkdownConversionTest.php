@@ -148,6 +148,55 @@ class HtmlMarkdownConversionTest extends TestCase {
 		$this->assertStringContainsString( '[Link 2](https://example.com/2)', $markdown );
 	}
 
+	public function test_bold_with_trailing_space_shifted_outside() {
+		$html     = '<p><strong>Ask questions </strong></p>';
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( '**Ask questions** ', $markdown );
+		$this->assertStringNotContainsString( '**Ask questions **', $markdown );
+	}
+
+	public function test_bold_with_leading_space_shifted_outside() {
+		$html     = '<p><strong> Ask questions</strong></p>';
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( ' **Ask questions**', $markdown );
+		$this->assertStringNotContainsString( '** Ask questions**', $markdown );
+	}
+
+	public function test_bold_with_both_spaces_shifted_outside() {
+		$html     = '<p><strong> Ask questions </strong></p>';
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( ' **Ask questions** ', $markdown );
+	}
+
+	public function test_nbsp_converted_to_standard_space() {
+		$html     = "<p>Ask\xC2\xA0questions&nbsp;<strong>now&nbsp;</strong></p>";
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringNotContainsString( "\xC2\xA0", $markdown );
+		$this->assertStringNotContainsString( '&nbsp;', $markdown );
+		$this->assertStringContainsString( 'Ask questions **now** ', $markdown );
+	}
+
+	public function test_italic_strikethrough_code_spaces_normalized() {
+		$html     = '<p><em>Italic </em> <s>Strikethrough </s> <code>Code </code></p>';
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( '*Italic* ', $markdown );
+		$this->assertStringContainsString( '~~Strikethrough~~ ', $markdown );
+		$this->assertStringContainsString( '`Code` ', $markdown );
+	}
+
+	public function test_fenced_code_block_preserved_without_alteration() {
+		$input    = "Text **Ask questions **\n\n```php\n\$x = 5 ** \$y;\n```\n";
+		$normalized = Push_MD_HTML_Converter::normalize_markdown( $input );
+		$this->assertStringContainsString( 'Text **Ask questions** ', $normalized );
+		$this->assertStringContainsString( '$x = 5 ** $y;', $normalized );
+	}
+
+	public function test_trailing_space_before_punctuation_cleaned_up() {
+		$html     = '<p><strong>Ask questions </strong>.</p>';
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( '**Ask questions**.', $markdown );
+	}
+
 	// -------------------------------------------------------------------------
 	// Push_MD_Markdown_Consumer tests
 	// -------------------------------------------------------------------------
