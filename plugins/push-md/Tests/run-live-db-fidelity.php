@@ -72,18 +72,10 @@ foreach ( $db_posts as $idx => $post ) {
 		echo sprintf( "[PASS] %s\n", $label );
 		$passed++;
 	} catch ( Exception $e ) {
-		if ( $failed < 5 ) {
-			echo sprintf( "\n[FAIL #%d] %s:\n%s\n\n", $failed + 1, $label, $e->getMessage() );
-		} else {
-			echo sprintf( "[FAIL] %s\n", $label );
-		}
+		echo sprintf( "\n[FAIL #%d] %s:\n%s\n\n", $failed + 1, $label, $e->getMessage() );
 		$failed++;
 	} catch ( Throwable $t ) {
-		if ( $failed < 5 ) {
-			echo sprintf( "\n[FAIL #%d] %s:\n%s\n\n", $failed + 1, $label, $t->getMessage() );
-		} else {
-			echo sprintf( "[FAIL] %s\n", $label );
-		}
+		echo sprintf( "\n[FAIL #%d] %s:\n%s\n\n", $failed + 1, $label, $t->getMessage() );
 		$failed++;
 	}
 }

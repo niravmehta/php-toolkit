@@ -6,7 +6,8 @@ use League\CommonMark\Environment\Environment;
 use League\CommonMark\Extension\CommonMark\CommonMarkCoreExtension;
 use League\CommonMark\Extension\CommonMark\Node\Block as ExtensionBlock;
 use League\CommonMark\Extension\CommonMark\Node\Inline as ExtensionInline;
-use League\CommonMark\Extension\GithubFlavoredMarkdownExtension;
+use League\CommonMark\Extension\Strikethrough\StrikethroughExtension;
+use League\CommonMark\Extension\Table\TableExtension;
 use League\CommonMark\Extension\Strikethrough\Strikethrough;
 use League\CommonMark\Extension\Table\Table;
 use League\CommonMark\Extension\Table\TableCell;
@@ -76,7 +77,8 @@ class MarkdownConsumer implements DataFormatConsumer {
 
 		$environment = new Environment( array() );
 		$environment->addExtension( new CommonMarkCoreExtension() );
-		$environment->addExtension( new GithubFlavoredMarkdownExtension() );
+		$environment->addExtension( new StrikethroughExtension() );
+		$environment->addExtension( new TableExtension() );
 
 		$parser   = new MarkdownParser( $environment );
 		$document = $parser->parse( $markdown );

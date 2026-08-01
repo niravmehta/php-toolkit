@@ -737,10 +737,10 @@ class RoundTripFidelityTest extends TestCase {
 				$href = $processor->get_attribute( 'href' );
 				$src  = $processor->get_attribute( 'src' );
 				if ( 'A' === $tag && $href ) {
-					$links[] = html_entity_decode( $href, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+					$links[] = urldecode( html_entity_decode( $href, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
 				}
 				if ( 'IMG' === $tag && $src ) {
-					$media[] = html_entity_decode( $src, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+					$media[] = urldecode( html_entity_decode( $src, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
 				}
 				if ( in_array( $tag, array( 'H1', 'H2', 'H3', 'H4', 'H5', 'H6' ), true ) ) {
 					$headings[] = $tag;
