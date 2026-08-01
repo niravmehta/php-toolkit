@@ -931,11 +931,8 @@ class Push_MD_Plugin {
 			);
 			$result       = $consumer->consume();
 			$block_markup = $result->get_block_markup();
-			$metadata     = array();
-			foreach ( $result->get_all_metadata() as $key => $value ) {
-				$metadata[ $key ] = is_array( $value ) ? reset( $value ) : $value;
-			}
-			$metadata = self::normalize_supported_frontmatter(
+			$metadata     = self::extract_markdown_metadata_with_local_fallback( $entry['content'], $result );
+			$metadata     = self::normalize_supported_frontmatter(
 				$metadata,
 				apply_filters(
 					'push_md_supported_frontmatter_keys',
@@ -950,6 +947,14 @@ class Push_MD_Plugin {
 						'categories',
 						'tags',
 						'featured_image',
+						'seo_title',
+						'seo_description',
+						'seo_focus_keyword',
+						'seo_keywords',
+						'seo-title',
+						'seo-description',
+						'seo-focus-keyword',
+						'seo-keywords',
 					),
 					$post_type
 				)
@@ -1126,7 +1131,8 @@ class Push_MD_Plugin {
 				if ( $service ) {
 					return self::build_protocol_error_response(
 						$service,
-						self::get_throwable_message( $exception )
+						self::get_throwable_message( $exception ),
+						0 === strpos( $git_path, '/info/refs' )
 					);
 				}
 
@@ -1185,7 +1191,8 @@ class Push_MD_Plugin {
 			if ( $service ) {
 				return self::build_protocol_error_response(
 					$service,
-					self::get_throwable_message( $exception )
+					self::get_throwable_message( $exception ),
+					0 === strpos( $git_path, '/info/refs' )
 				);
 			}
 
@@ -1244,17 +1251,31 @@ class Push_MD_Plugin {
 		return $response;
 	}
 
-	private static function build_protocol_error_response( $service, $message ) {
-		$response = new Push_MD_Buffering_Response();
-		$response->send_header( 'Content-Type', 'application/x-' . $service . '-result' );
+	private static function build_protocol_error_response( $service, $message, $is_info_refs = false ) {
+		$response            = new Push_MD_Buffering_Response();
+		$content_type_suffix = $is_info_refs ? '-advertisement' : '-result';
+		$response->send_header( 'Content-Type', 'application/x-' . $service . $content_type_suffix );
 		$response->send_header( 'Cache-Control', 'no-cache' );
 		$response->send_header( 'Git-Protocol', 'version=2' );
-		$response->append_bytes(
-			GitProtocolEncoderPipe::encode_packet_line(
-				'error ' . rtrim( $message ) . "\n",
-				"\x03"
-			) . '0000'
-		);
+
+		if ( $is_info_refs ) {
+			$response->append_bytes(
+				GitProtocolEncoderPipe::encode_packet_line(
+					'# service=' . $service . "\n"
+				) . '0000' . GitProtocolEncoderPipe::encode_packet_line(
+					"version 2\n"
+				) . GitProtocolEncoderPipe::encode_packet_line(
+					'ERR ' . rtrim( $message ) . "\n"
+				) . '0000'
+			);
+		} else {
+			$response->append_bytes(
+				GitProtocolEncoderPipe::encode_packet_line(
+					'error ' . rtrim( $message ) . "\n",
+					"\x03"
+				) . '0000'
+			);
+		}
 
 		return $response->to_rest_response();
 	}
@@ -2077,13 +2098,12 @@ class Push_MD_Plugin {
 			foreach ( $categories as $cat ) {
 				$cat_paths[] = self::get_category_path_string( $cat );
 			}
-			$metadata['categories'] = array( implode( ', ', $cat_paths ) );
+			$metadata['categories'] = $cat_paths;
 		}
 
 		$tags = get_the_terms( $post->ID, 'post_tag' );
 		if ( ! empty( $tags ) && ! is_wp_error( $tags ) ) {
-			$tag_names        = wp_list_pluck( $tags, 'name' );
-			$metadata['tags'] = array( implode( ', ', $tag_names ) );
+			$metadata['tags'] = wp_list_pluck( $tags, 'name' );
 		}
 
 		$thumb_id = get_post_thumbnail_id( $post->ID );
@@ -2711,10 +2731,7 @@ class Push_MD_Plugin {
 		);
 		$result   = $consumer->consume();
 		self::assert_block_markup_is_safe( $result->get_block_markup() );
-		$metadata = array();
-		foreach ( $result->get_all_metadata() as $key => $value ) {
-			$metadata[ $key ] = is_array( $value ) ? reset( $value ) : $value;
-		}
+		$metadata = self::extract_markdown_metadata_with_local_fallback( $markdown, $result );
 
 		self::reject_path_identity_frontmatter( $metadata );
 		$metadata = self::normalize_supported_frontmatter(
@@ -2733,6 +2750,14 @@ class Push_MD_Plugin {
 					'categories',
 					'tags',
 					'featured_image',
+					'seo_title',
+					'seo_description',
+					'seo_focus_keyword',
+					'seo_keywords',
+					'seo-title',
+					'seo-description',
+					'seo-focus-keyword',
+					'seo-keywords',
 				),
 				$post_type
 			)
@@ -4014,6 +4039,8 @@ class Push_MD_Plugin {
 			$allowed[ $key ] = true;
 		}
 
+		$allowed_array_keys = array( 'tags', 'categories' );
+
 		$normalized = array();
 		foreach ( $metadata as $key => $value ) {
 			$key = (string) $key;
@@ -4025,6 +4052,12 @@ class Push_MD_Plugin {
 					)
 				);
 			}
+
+			if ( in_array( $key, $allowed_array_keys, true ) && is_array( $value ) ) {
+				$normalized[ $key ] = array_values( array_filter( array_map( 'trim', array_map( 'strval', $value ) ), 'strlen' ) );
+				continue;
+			}
+
 			if ( ! is_scalar( $value ) || is_bool( $value ) ) {
 				throw new Exception(
 					sprintf(
@@ -4676,15 +4709,17 @@ class Push_MD_Plugin {
 	}
 
 	private static function read_repository_entries_from_commit( GitRepository $repository, $commit_hash ) {
-		$commit = $repository->read_object( $commit_hash )->as_commit();
-		$files  = array();
+		$files = array();
 
-		if ( Commit::is_null_hash( $commit->tree ) ) {
-			return $files;
+		try {
+			$commit = $repository->read_object( $commit_hash )->as_commit();
+			if ( ! Commit::is_null_hash( $commit->tree ) ) {
+				self::collect_tree_entries( $repository, $commit->tree, '', $files );
+				ksort( $files );
+			}
+		} catch ( Throwable $e ) {
+			// Prevent ByteStream/MemoryPipe exceptions from breaking execution.
 		}
-
-		self::collect_tree_entries( $repository, $commit->tree, '', $files );
-		ksort( $files );
 
 		return $files;
 	}
@@ -4696,7 +4731,12 @@ class Push_MD_Plugin {
 	}
 
 	private static function collect_tree_entries( GitRepository $repository, $tree_hash, $prefix, &$files ) {
-		$tree = $repository->read_object( $tree_hash )->as_tree();
+		try {
+			$tree = $repository->read_object( $tree_hash )->as_tree();
+		} catch ( Throwable $e ) {
+			return;
+		}
+
 		foreach ( $tree->entries as $entry ) {
 			$path = ltrim( $prefix . '/' . $entry->name, '/' );
 			if ( TreeEntry::FILE_MODE_DIRECTORY === $entry->get_mode_bucket() ) {
@@ -4710,9 +4750,17 @@ class Push_MD_Plugin {
 			) {
 				throw new Exception( 'Push rejected because one or more repository entries use an unsupported Git file mode.' );
 			}
+
+			$content = '';
+			try {
+				$content = $repository->read_object( $entry->hash )->consume_all();
+			} catch ( Throwable $e ) {
+				$content = '';
+			}
+
 			$files[ $path ] = array(
 				'mode'    => $entry->get_mode_bucket(),
-				'content' => $repository->read_object( $entry->hash )->consume_all(),
+				'content' => $content,
 			);
 		}
 	}
@@ -5808,6 +5856,10 @@ class Push_MD_Plugin {
 			'seo_description',
 			'seo_focus_keyword',
 			'seo_keywords',
+			'seo-title',
+			'seo-description',
+			'seo-focus-keyword',
+			'seo-keywords',
 		);
 		if ( ! is_array( $keys ) ) {
 			return $seo_keys;
@@ -5846,18 +5898,19 @@ class Push_MD_Plugin {
 			return;
 		}
 
-		if ( isset( $metadata['seo_title'] ) ) {
-			self::update_post_seo_meta( $post_id, 'title', $metadata['seo_title'] );
+		$title_val = isset( $metadata['seo_title'] ) ? $metadata['seo_title'] : ( isset( $metadata['seo-title'] ) ? $metadata['seo-title'] : null );
+		if ( null !== $title_val ) {
+			self::update_post_seo_meta( $post_id, 'title', $title_val );
 		}
 
-		if ( isset( $metadata['seo_description'] ) ) {
-			self::update_post_seo_meta( $post_id, 'description', $metadata['seo_description'] );
+		$desc_val = isset( $metadata['seo_description'] ) ? $metadata['seo_description'] : ( isset( $metadata['seo-description'] ) ? $metadata['seo-description'] : null );
+		if ( null !== $desc_val ) {
+			self::update_post_seo_meta( $post_id, 'description', $desc_val );
 		}
 
-		if ( isset( $metadata['seo_focus_keyword'] ) ) {
-			self::update_post_seo_meta( $post_id, 'focus_keyword', $metadata['seo_focus_keyword'] );
-		} elseif ( isset( $metadata['seo_keywords'] ) ) {
-			self::update_post_seo_meta( $post_id, 'focus_keyword', $metadata['seo_keywords'] );
+		$kw_val = isset( $metadata['seo_focus_keyword'] ) ? $metadata['seo_focus_keyword'] : ( isset( $metadata['seo-focus-keyword'] ) ? $metadata['seo-focus-keyword'] : ( isset( $metadata['seo_keywords'] ) ? $metadata['seo_keywords'] : ( isset( $metadata['seo-keywords'] ) ? $metadata['seo-keywords'] : null ) ) );
+		if ( null !== $kw_val ) {
+			self::update_post_seo_meta( $post_id, 'focus_keyword', $kw_val );
 		}
 	}
 
@@ -5950,6 +6003,130 @@ class Push_MD_Plugin {
 			update_post_meta( $post_id, $yoast_key, $val );
 			update_post_meta( $post_id, $rm_key, $val );
 		}
+	}
+
+	private static function extract_markdown_metadata_with_local_fallback( $markdown, $result = null ) {
+		$metadata = self::parse_frontmatter_block_local( $markdown );
+
+		if ( $result ) {
+			foreach ( $result->get_all_metadata() as $key => $value ) {
+				$key_str       = (string) $key;
+				$canonical_key = str_replace( '-', '_', $key_str );
+				if ( ! isset( $metadata[ $key_str ] ) && ! isset( $metadata[ $canonical_key ] ) ) {
+					$val = is_array( $value ) ? reset( $value ) : $value;
+					if ( ! is_array( $val ) || ! empty( $val ) ) {
+						$metadata[ $key_str ] = $val;
+					}
+				}
+			}
+		}
+
+		return $metadata;
+	}
+
+	private static function parse_frontmatter_block_local( $markdown ) {
+		if ( ! preg_match( '/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/s', $markdown, $matches ) ) {
+			return array();
+		}
+
+		$frontmatter_text = $matches[1];
+		$lines            = preg_split( "/\r\n|\n|\r/", $frontmatter_text );
+		$count            = count( $lines );
+		$metadata         = array();
+
+		for ( $i = 0; $i < $count; $i++ ) {
+			$line = $lines[ $i ];
+			if ( '' === trim( $line ) || preg_match( '/^\s*#/', $line ) ) {
+				continue;
+			}
+			if ( preg_match( '/^\s+/', $line ) ) {
+				continue;
+			}
+			if ( ! preg_match( '/^([A-Za-z0-9_.-]+)\s*:(?:\s*(.*))?$/', $line, $key_matches ) ) {
+				continue;
+			}
+
+			$key = $key_matches[1];
+			$raw = isset( $key_matches[2] ) ? trim( $key_matches[2] ) : '';
+
+			// Check if value continues on subsequent indented lines.
+			$nested_lines = array();
+			$j            = $i + 1;
+			while ( $j < $count && preg_match( '/^\s+/', $lines[ $j ] ) ) {
+				$nested_lines[] = $lines[ $j ];
+				++$j;
+			}
+
+			if ( ! empty( $nested_lines ) ) {
+				$i = $j - 1;
+
+				// Check if this is a YAML list.
+				$list_items = array();
+				$is_list    = false;
+
+				foreach ( $nested_lines as $nested_line ) {
+					$trimmed_nested = trim( $nested_line );
+					if ( '' === $trimmed_nested ) {
+						continue;
+					}
+					if ( preg_match( '/^-\s+(.*)$/', $trimmed_nested, $item_match ) ) {
+						$is_list      = true;
+						$item_val     = trim( $item_match[1] );
+						$list_items[] = self::unquote_frontmatter_value( $item_val );
+					}
+				}
+
+				if ( $is_list ) {
+					$metadata[ $key ] = $list_items;
+					continue;
+				}
+
+				// Multiline / indented scalar string.
+				$scalar_lines = array();
+				foreach ( $nested_lines as $nested_line ) {
+					$trimmed_nested = trim( $nested_line );
+					if ( '' !== $trimmed_nested ) {
+						$scalar_lines[] = $trimmed_nested;
+					}
+				}
+				if ( '|' === $raw ) {
+					$metadata[ $key ] = implode( "\n", $scalar_lines );
+				} else {
+					$metadata[ $key ] = implode( ' ', $scalar_lines );
+				}
+				continue;
+			}
+
+			if ( '' === $raw ) {
+				$metadata[ $key ] = '';
+				continue;
+			}
+
+			if ( 0 === strpos( $raw, '[' ) && ']' === substr( $raw, -1 ) ) {
+				$decoded = json_decode( $raw, true );
+				if ( is_array( $decoded ) ) {
+					$metadata[ $key ] = array_values( array_filter( array_map( 'trim', array_map( 'strval', $decoded ) ), 'strlen' ) );
+					continue;
+				}
+				$inner            = trim( substr( $raw, 1, -1 ) );
+				$metadata[ $key ] = array_values( array_filter( array_map( 'trim', explode( ',', $inner ) ), 'strlen' ) );
+				continue;
+			}
+
+			$metadata[ $key ] = self::unquote_frontmatter_value( $raw );
+		}
+
+		return $metadata;
+	}
+
+	private static function unquote_frontmatter_value( $val ) {
+		$val   = trim( (string) $val );
+		$first = substr( $val, 0, 1 );
+		$last  = substr( $val, -1 );
+		if ( ( '"' === $first && '"' === $last ) || ( "'" === $first && "'" === $last ) ) {
+			return substr( $val, 1, -1 );
+		}
+		return $val;
 	}
 
 	public static function throw_on_php_warning( $severity, $message, $file, $line ) {

@@ -945,4 +945,14 @@ MD;
 		do_action( 'push_md_import_author', 1, array( 'twitter' => '@custom_author' ) );
 		$this->assertEquals( '@custom_author', $imported_author_meta[1] );
 	}
+
+	public function test_hyphenated_frontmatter_keys_and_multiline_yaml_lists() {
+		$markdown = "---\nseo-title: \"Custom SEO Title\"\ntags:\n  - \"Opt-in Forms\"\n  - \"Lead Capture\"\n---\n\nPost body content.\n";
+		$metadata = $this->invoke_private( 'parse_frontmatter_block_local', array( $markdown ) );
+
+		$this->assertArrayHasKey( 'seo-title', $metadata );
+		$this->assertEquals( 'Custom SEO Title', $metadata['seo-title'] );
+		$this->assertArrayHasKey( 'tags', $metadata );
+		$this->assertEquals( array( 'Opt-in Forms', 'Lead Capture' ), $metadata['tags'] );
+	}
 }

@@ -51,8 +51,28 @@ class Push_MD_Markdown_Producer {
 		$content = $this->blocks_with_meta->get_block_markup();
 
 		if ( $this->content_has_blocks( $content ) ) {
-			// Gutenberg content: delegate to MarkdownProducer and normalize output.
-			$producer       = new MarkdownProducer( $this->blocks_with_meta );
+			// Gutenberg content: handle core/quote blocks that have innerHTML instead of nested innerBlocks.
+			$content = preg_replace_callback(
+				'#<!-- wp:quote\b[^>]*-->\s*<blockquote\b[^>]*>(.*?)</blockquote>\s*<!-- /wp:quote -->#is',
+				function ( $matches ) {
+					$inner_md = Push_MD_HTML_Converter::convert( $matches[1] );
+					$lines    = explode( "\n", trim( $inner_md ) );
+					$quoted   = implode(
+						"\n",
+						array_map(
+							function ( $l ) {
+								return '> ' . $l;
+							},
+							$lines
+						)
+					);
+					return "\n\n" . $quoted . "\n\n";
+				},
+				$content
+			);
+
+			$blocks_obj     = new BlocksWithMetadata( $content, $this->blocks_with_meta->get_all_metadata() );
+			$producer       = new MarkdownProducer( $blocks_obj );
 			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
 		} else {
 			// Standard HTML or plain-text content.

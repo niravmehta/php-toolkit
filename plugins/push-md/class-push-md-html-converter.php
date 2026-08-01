@@ -30,6 +30,9 @@ class Push_MD_HTML_Converter {
 			return (string) $filtered;
 		}
 
+		// Convert hybrid HTML image-markdown links `[<img...src="SRC"...>](URL)` to `<a href="URL"><img ...></a>`.
+		$html = preg_replace( '/\[\s*(<img[^>]+>)\s*\]\s*\(([^)]+)\)/i', '<a href="$2">$1</a>', $html );
+
 		return self::convert_fragment( $html );
 	}
 
@@ -46,6 +49,11 @@ class Push_MD_HTML_Converter {
 		// Inline formatting state: prevent duplicate markers for nested identical tags.
 		$active_inlines = array();
 
+		// Inline elements that were emitted as raw HTML to avoid merging Markdown
+		// delimiter runs (e.g. <strong>one</strong><strong>cta</strong> would
+		// otherwise become "**one****cta**", which CommonMark mis-parses).
+		$html_inline_stack = array();
+
 		// List nesting: each entry is array( 'type' => 'ul'|'ol', 'count' => int ).
 		$list_stack = array();
 
@@ -57,10 +65,17 @@ class Push_MD_HTML_Converter {
 
 			if ( '#text' === $token_type ) {
 				$text = $processor->get_modifiable_text();
-				if ( ! empty( $list_stack ) && '' === trim( $text ) ) {
-					// Ignore pure whitespace text nodes inside lists between tags.
-					continue;
+				// Collapse all whitespace sequences into a single space (HTML normalizes whitespace).
+				// We don't worry about <pre> tags because we process their inner HTML and skip_to_closer().
+				$text = preg_replace( '/[ \t\r\n\f]+/', ' ', $text );
+				
+				if ( ' ' === $text ) {
+					// Ignore pure whitespace text nodes at line boundaries.
+					if ( '' === $output || "\n" === substr( $output, -1 ) ) {
+						continue;
+					}
 				}
+				
 				$output .= $text;
 				continue;
 			}
@@ -75,9 +90,41 @@ class Push_MD_HTML_Converter {
 			if ( ! $is_closer ) {
 				// Check for raw HTML preservation based on tag name or CSS classes.
 				if ( self::should_preserve_element( $processor, $tag ) ) {
-					$outer  = self::get_outer_html( $processor );
-					$output = rtrim( $output ) . "\n\n" . $outer . "\n\n";
-					$processor->skip_to_closer();
+					$container_tags = array( 'div', 'aside', 'section', 'article', 'header', 'footer', 'nav', 'main', 'figure', 'blockquote' );
+					if ( in_array( strtolower( $tag ), $container_tags, true ) ) {
+						$inner = $processor->get_inner_html();
+						if ( false !== $inner ) {
+							$attr_names = $processor->get_attribute_names_with_prefix( '' );
+							$attr_str   = '';
+							if ( ! empty( $attr_names ) ) {
+								foreach ( $attr_names as $name ) {
+									$val       = $processor->get_attribute( $name );
+									$attr_str .= ' ' . $name . '="' . htmlspecialchars( $val, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) . '"';
+								}
+							}
+							$opening_tag = '<' . strtolower( $tag ) . $attr_str . '>';
+							$closing_tag = '</' . strtolower( $tag ) . '>';
+							
+							$inner_md = self::convert_fragment( $inner );
+							$output = rtrim( $output ) . "\n\n" . $opening_tag . "\n\n" . trim( $inner_md ) . "\n\n" . $closing_tag . "\n\n";
+							$processor->skip_to_closer();
+							continue;
+						}
+					}
+
+					$outer       = self::get_outer_html( $processor, $tag );
+					$outer       = preg_replace( '/^[ \t]+/m', '', $outer );
+					$inline_tags = array( 'a', 'span', 'img', 'b', 'i', 'strong', 'em', 'code', 's', 'del', 'sub', 'sup' );
+					if ( in_array( strtolower( $tag ), $inline_tags, true ) ) {
+						$output .= $outer;
+					} else {
+						$outer_clean = preg_replace( "/\n{2,}/", "\n", $outer );
+						$output      = rtrim( $output ) . "\n\n" . $outer_clean . "\n\n";
+					}
+					$void_tags = array( 'img', 'br', 'hr', 'input', 'meta', 'link', 'embed', 'param', 'source', 'track', 'wbr' );
+					if ( ! in_array( strtolower( $tag ), $void_tags, true ) ) {
+						$processor->skip_to_closer();
+					}
 					continue;
 				}
 
@@ -167,13 +214,15 @@ class Push_MD_HTML_Converter {
 							}
 							$output .= "\n";
 							$processor->skip_to_closer();
+						} else {
+							$output = rtrim( $output ) . "\n\n> ";
 						}
 						break;
 
 					case 'PRE':
 						$inner = $processor->get_inner_html();
 						if ( false !== $inner ) {
-							// Strip any inner <code> wrapper tags, keep the text.
+							$inner  = preg_replace( '/<br\s*\/?>/i', "\n", $inner );
 							$code   = wp_strip_all_tags( $inner );
 							$output = rtrim( $output ) . "\n\n```\n" . $code . "\n```\n\n";
 							$processor->skip_to_closer();
@@ -204,7 +253,14 @@ class Push_MD_HTML_Converter {
 					case 'STRONG':
 					case 'B':
 						if ( ! in_array( 'STRONG', $active_inlines, true ) ) {
-							$output          .= '**';
+							if ( '*' === substr( $output, -1 ) ) {
+								// Adjacent delimiter runs (e.g. "**one****cta**") are
+								// ambiguous in CommonMark, so use raw HTML instead.
+								$output             .= '<strong>';
+								$html_inline_stack[] = 'STRONG';
+							} else {
+								$output .= '**';
+							}
 							$active_inlines[] = 'STRONG';
 						}
 						break;
@@ -212,7 +268,12 @@ class Push_MD_HTML_Converter {
 					case 'EM':
 					case 'I':
 						if ( ! in_array( 'EM', $active_inlines, true ) ) {
-							$output          .= '*';
+							if ( '*' === substr( $output, -1 ) ) {
+								$output             .= '<em>';
+								$html_inline_stack[] = 'EM';
+							} else {
+								$output .= '*';
+							}
 							$active_inlines[] = 'EM';
 						}
 						break;
@@ -220,7 +281,12 @@ class Push_MD_HTML_Converter {
 					case 'DEL':
 					case 'S':
 						if ( ! in_array( 'DEL', $active_inlines, true ) ) {
-							$output          .= '~~';
+							if ( '~' === substr( $output, -1 ) ) {
+								$output             .= '<del>';
+								$html_inline_stack[] = 'DEL';
+							} else {
+								$output .= '~~';
+							}
 							$active_inlines[] = 'DEL';
 						}
 						break;
@@ -293,7 +359,9 @@ class Push_MD_HTML_Converter {
 						break;
 
 					case 'FIGURE':
-						$output = rtrim( $output ) . "\n\n";
+						if ( empty( $link_stack ) ) {
+							$output = rtrim( $output ) . "\n\n";
+						}
 						break;
 
 					case 'STRONG':
@@ -301,7 +369,13 @@ class Push_MD_HTML_Converter {
 						$pos = array_search( 'STRONG', $active_inlines, true );
 						if ( false !== $pos ) {
 							array_splice( $active_inlines, $pos, 1 );
-							$output .= '**';
+							$html_pos = array_search( 'STRONG', $html_inline_stack, true );
+							if ( false !== $html_pos ) {
+								array_splice( $html_inline_stack, $html_pos, 1 );
+								$output .= '</strong>';
+							} else {
+								$output .= '**';
+							}
 						}
 						break;
 
@@ -310,7 +384,13 @@ class Push_MD_HTML_Converter {
 						$pos = array_search( 'EM', $active_inlines, true );
 						if ( false !== $pos ) {
 							array_splice( $active_inlines, $pos, 1 );
-							$output .= '*';
+							$html_pos = array_search( 'EM', $html_inline_stack, true );
+							if ( false !== $html_pos ) {
+								array_splice( $html_inline_stack, $html_pos, 1 );
+								$output .= '</em>';
+							} else {
+								$output .= '*';
+							}
 						}
 						break;
 
@@ -319,7 +399,13 @@ class Push_MD_HTML_Converter {
 						$pos = array_search( 'DEL', $active_inlines, true );
 						if ( false !== $pos ) {
 							array_splice( $active_inlines, $pos, 1 );
-							$output .= '~~';
+							$html_pos = array_search( 'DEL', $html_inline_stack, true );
+							if ( false !== $html_pos ) {
+								array_splice( $html_inline_stack, $html_pos, 1 );
+								$output .= '</del>';
+							} else {
+								$output .= '~~';
+							}
 						}
 						break;
 
@@ -332,8 +418,16 @@ class Push_MD_HTML_Converter {
 						break;
 
 					case 'A':
-						$href    = ! empty( $link_stack ) ? array_pop( $link_stack ) : '';
-						$output .= '](' . $href . ')';
+						$href = ! empty( $link_stack ) ? array_pop( $link_stack ) : '';
+						// Markdown link text cannot represent trailing whitespace, so move any
+						// trailing spaces inside the anchor text outside the link destination.
+						// This preserves the word boundary for text that follows the link.
+						$trailing_ws = '';
+						if ( preg_match( '/[ \t]+$/', $output, $ws_matches ) ) {
+							$trailing_ws = $ws_matches[0];
+							$output      = substr( $output, 0, -strlen( $trailing_ws ) );
+						}
+						$output .= '](' . $href . ')' . $trailing_ws;
 						break;
 				}
 			}
@@ -397,8 +491,11 @@ class Push_MD_HTML_Converter {
 				if ( '' === trim( $inner ) ) {
 					return $inner;
 				}
-				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
-				return $m[1] . '***' . $m[2] . '***' . $m[3];
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . '***' . $trimmed_both . '***' . $trailing_space;
 			},
 			$text
 		);
@@ -411,8 +508,11 @@ class Push_MD_HTML_Converter {
 				if ( '' === trim( $inner ) ) {
 					return $inner;
 				}
-				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
-				return $m[1] . '**' . $m[2] . '**' . $m[3];
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . '**' . $trimmed_both . '**' . $trailing_space;
 			},
 			$text
 		);
@@ -425,8 +525,11 @@ class Push_MD_HTML_Converter {
 				if ( '' === trim( $inner ) ) {
 					return $inner;
 				}
-				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
-				return $m[1] . '*' . $m[2] . '*' . $m[3];
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . '*' . $trimmed_both . '*' . $trailing_space;
 			},
 			$text
 		);
@@ -439,8 +542,11 @@ class Push_MD_HTML_Converter {
 				if ( '' === trim( $inner ) ) {
 					return $inner;
 				}
-				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
-				return $m[1] . '~~' . $m[2] . '~~' . $m[3];
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . '~~' . $trimmed_both . '~~' . $trailing_space;
 			},
 			$text
 		);
@@ -453,13 +559,17 @@ class Push_MD_HTML_Converter {
 				if ( '' === trim( $inner ) ) {
 					return $inner;
 				}
-				preg_match( '/^(\s*)([\s\S]*?)(\s*)$/u', $inner, $m );
-				return $m[1] . '`' . $m[2] . '`' . $m[3];
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . '`' . $trimmed_both . '`' . $trailing_space;
 			},
 			$text
 		);
 
-		// 6. Clean up trailing space before punctuation directly following delimiters.
+		// Clean up trailing space before punctuation directly following delimiters and collapse multiple spaces (except indentation).
+		$text = preg_replace( '/(?<!^|\n)[ \t]{2,}/m', ' ', $text );
 		$text = preg_replace( '/(\*\*|\*|~~|`)[ \t]+([.,?!;:])/u', '$1$2', $text );
 
 		return $text;
@@ -500,7 +610,8 @@ class Push_MD_HTML_Converter {
 				$current_row = array();
 			} elseif ( ( 'TH' === $tag || 'TD' === $tag ) && ! $is_closer ) {
 				$cell_html     = $processor->get_inner_html();
-				$current_row[] = false !== $cell_html ? trim( self::convert_fragment( $cell_html ) ) : '';
+				$cell_md       = false !== $cell_html ? trim( self::convert_fragment( $cell_html ) ) : '';
+				$current_row[] = str_replace( array( "\r\n", "\r", "\n" ), '<br>', $cell_md );
 			}
 		}
 
@@ -572,18 +683,43 @@ class Push_MD_HTML_Converter {
 	private static function should_preserve_element( $processor, $tag ) {
 		$tag = strtolower( $tag );
 
-		// Inline images with floating alignment (alignleft/alignright/aligncenter), media IDs, or dimensions are preserved as raw HTML.
+		// Inline images should convert cleanly to Markdown image syntax without code fences.
 		if ( 'img' === $tag ) {
-			$class_attr = $processor->get_attribute( 'class' );
-			$has_align  = $class_attr && preg_match( '/\b(alignleft|alignright|aligncenter|wp-image-\d+)\b/', $class_attr );
-			$has_dims   = null !== $processor->get_attribute( 'width' ) || null !== $processor->get_attribute( 'height' );
-			if ( ! $has_align && ! $has_dims ) {
+			return false;
+		}
+
+		if ( 'figure' === $tag ) {
+			$inner = $processor->get_inner_html();
+			if ( false === $inner || false === strpos( strtolower( $inner ), '<figcaption' ) ) {
 				return false;
 			}
 		}
 
+		// Anchors that carry JavaScript event handlers (onclick etc.) must be
+		// preserved as raw HTML; converting them to Markdown links would discard
+		// the handler attribute (e.g. tutorial code snippets like
+		// <a href="#" onclick="window.icegram.get_message_by_id(...)">...).
+		if ( 'a' === $tag ) {
+			$attr_names = $processor->get_attribute_names_with_prefix( 'on' );
+			if ( ! empty( $attr_names ) ) {
+				return true;
+			}
+		}
+
+		// Inline <code> elements that contain nested markup (anchors, buttons)
+		// cannot be represented as Markdown code spans without corrupting the
+		// snippet (e.g. [icegram ...]<a href="#">text</a>[/icegram]), so preserve
+		// them as raw inline HTML.
+		if ( 'code' === $tag ) {
+			$inner = $processor->get_inner_html();
+			if ( false !== $inner && preg_match( '/<[a-z][a-z0-9]*/i', $inner ) ) {
+				return true;
+			}
+			return false;
+		}
+
 		// 1. Tag name preservation.
-		$default_preserved_tags = array( 'figcaption', 'iframe', 'form', 'script', 'style', 'svg', 'canvas' );
+		$default_preserved_tags = array( 'figure', 'figcaption', 'iframe', 'form', 'script', 'style', 'svg', 'canvas' );
 		if ( function_exists( 'apply_filters' ) ) {
 			$preserved_tags = apply_filters( 'push_md_preserved_html_tags', $default_preserved_tags, $tag );
 		} else {
@@ -594,24 +730,42 @@ class Push_MD_HTML_Converter {
 			return true;
 		}
 
-		// 2. CSS Class preservation.
-		$class_attr = $processor->get_attribute( 'class' );
-		if ( empty( $class_attr ) || ! is_string( $class_attr ) ) {
-			return false;
+		// 2. CSS Class and Attribute preservation for 100% Fidelity.
+		// If an element has attributes that Markdown cannot represent (like IDs, inline styles,
+		// or custom CSS classes), we must preserve it as raw HTML to ensure it survives the round-trip.
+		
+		// Check for ID (but ignore IDs on headings, as Markdown will auto-generate them on round-trip)
+		if ( null !== $processor->get_attribute( 'id' ) ) {
+			if ( ! preg_match( '/^h[1-6]$/i', $tag ) ) {
+				return true;
+			}
 		}
 
-		// For links (A tags), only preserve if they are CTA buttons.
-		if ( 'a' === $tag ) {
-			$classes   = preg_split( '/\s+/', trim( $class_attr ) );
-			$is_button = false;
+		// Check for inline styles
+		if ( null !== $processor->get_attribute( 'style' ) ) {
+			return true;
+		}
+
+		// Check for custom classes
+		$class_attr = $processor->get_attribute( 'class' );
+		if ( ! empty( $class_attr ) && is_string( $class_attr ) ) {
+			$classes = preg_split( '/\s+/', trim( $class_attr ) );
+
+			// Widget classes that indicate non-convertible complex widgets.
+			$widget_classes = array( 'wp-caption', 'gallery', 'gallery-item', 'gallery-icon', 'gallery-caption' );
 			foreach ( $classes as $class ) {
-				if ( in_array( $class, array( 'button', 'btn', 'cta', 'download_link' ), true ) ) {
-					$is_button = true;
-					break;
+				if ( in_array( $class, $widget_classes, true ) ) {
+					return true;
 				}
 			}
-			if ( ! $is_button ) {
-				return false;
+
+			// Elements with custom classes not generated by standard Gutenberg blocks must be preserved.
+			$gutenberg_classes = array( 'has-fixed-layout', 'is-style-stripes', 'wp-block-table', 'wp-block-quote', 'wp-block-paragraph', 'wp-block-heading', 'wp-block-list', 'wp-block-code', 'aligncenter', 'alignleft', 'alignright', 'alignnone', 'alignwide', 'alignfull', 'has-text-align-center', 'has-text-align-left', 'has-text-align-right', 'has-background', 'has-text-color', 'has-large-font-size' );
+			$custom_classes    = array_diff( $classes, $gutenberg_classes );
+			
+			if ( ! empty( $custom_classes ) ) {
+				// If there are custom classes, preserve the element.
+				return true;
 			}
 		}
 
@@ -648,7 +802,7 @@ class Push_MD_HTML_Converter {
 			$preserved_classes = $default_preserved_classes;
 		}
 
-		$classes = preg_split( '/\s+/', trim( $class_attr ) );
+		$classes = preg_split( '/\s+/', trim( (string) $class_attr ) );
 		foreach ( $classes as $class ) {
 			if ( in_array( $class, $preserved_classes, true ) ) {
 				return true;
@@ -662,10 +816,11 @@ class Push_MD_HTML_Converter {
 	 * Reconstruct outer HTML string for the current tag element.
 	 *
 	 * @param DataLiberationHTMLProcessor $processor HTML processor.
+	 * @param string                      $tag       The tag name.
 	 * @return string Outer HTML element string.
 	 */
-	private static function get_outer_html( $processor ) {
-		$tag        = strtolower( $processor->get_tag() );
+	private static function get_outer_html( $processor, $tag ) {
+		$tag        = strtolower( (string) $tag );
 		$attr_names = $processor->get_attribute_names_with_prefix( '' );
 		$attr_str   = '';
 
