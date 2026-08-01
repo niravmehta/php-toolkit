@@ -62,17 +62,71 @@ class Push_MD_Markdown_Consumer {
 		$inner_consumer = new MarkdownConsumer( $this->markdown );
 		$raw_result     = $inner_consumer->consume();
 
-		if ( $this->use_block_comments ) {
-			$this->result = $raw_result;
-			return $this->result;
+		// Decode inline HTML tags that were escaped during Markdown parsing.
+		$block_markup = $this->unescape_inline_html_tags( $raw_result->get_block_markup() );
+		if ( ! $this->use_block_comments ) {
+			$block_markup = $this->strip_block_comments( $block_markup );
 		}
+		$block_markup = $this->encode_bare_ampersands( $block_markup );
 
-		// Strip Gutenberg block comment wrappers and return clean HTML.
-		$block_markup = $this->strip_block_comments( $raw_result->get_block_markup() );
 		$metadata     = $raw_result->get_all_metadata();
 		$this->result = new BlocksWithMetadata( $block_markup, $metadata );
 
 		return $this->result;
+	}
+
+	/**
+	 * Decode inline HTML tags that were escaped during Markdown parsing.
+	 *
+	 * @param string $markup Output markup.
+	 * @return string Markup with un-escaped inline HTML tags.
+	 */
+	private function unescape_inline_html_tags( $markup ) {
+		// Raw-text elements (script, style, pre, textarea) are deliberately excluded:
+		// un-escaping their start tags turns escaped source text into real elements
+		// that can swallow the rest of the document (e.g. an unclosed <script> inside
+		// a preserved <aside>), which breaks subsequent HTML processing and loses
+		// content. CommonMark treats these as block-level HTML, so they never reach
+		// this function as escaped inline tags anyway.
+		$tags = 'a|span|figure|figcaption|aside|iframe|form|img|div|table|thead|tbody|tfoot|tr|th|td|ul|ol|li|h[1-6]|b|i|strong|em|code|svg|canvas|br|hr|sub|sup|del|s|p|section|article|header|footer|nav|main|blockquote';
+
+		$unescape = function ( $matches ) {
+			return html_entity_decode( $matches[0], ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		};
+
+		// Protect the content of <code>/<pre>/<script>/<style>/<textarea> elements:
+		// escaped entities inside them are literal text (e.g. a code sample showing
+		// "<a href=...>" must not be un-escaped into a real element). Only un-escape
+		// tags that appear outside those containers.
+		$parts = preg_split( '#(<(?:code|pre|script|style|textarea)\b[^>]*>.*?</(?:code|pre|script|style|textarea)>)#is', $markup, -1, PREG_SPLIT_DELIM_CAPTURE );
+		if ( false === $parts || 1 === count( $parts ) ) {
+			return preg_replace_callback( '/&lt;(\/?(?:' . $tags . ')\b(?:\s+(?:&quot;|[^>])*)?)\s*&gt;/i', $unescape, $markup );
+		}
+
+		foreach ( $parts as $i => $part ) {
+			// Odd parts are the protected container segments (delimiter capture).
+			if ( 1 === $i % 2 ) {
+				continue;
+			}
+			$parts[ $i ] = preg_replace_callback( '/&lt;(\/?(?:' . $tags . ')\b(?:\s+(?:&quot;|[^>])*)?)\s*&gt;/i', $unescape, $part );
+		}
+
+		return implode( '', $parts );
+	}
+
+	/**
+	 * Encode bare ampersands as &amp; in the generated markup.
+	 *
+	 * The underlying MarkdownConsumer passes decoded text through unchanged, so
+	 * a literal "&" in the original HTML would come back as a bare "&" instead
+	 * of the well-formed "&amp;". Entities already present (&amp;, &lt;, &quot;,
+	 * numeric references) are left untouched.
+	 *
+	 * @param string $markup Output markup.
+	 * @return string Markup with bare ampersands encoded.
+	 */
+	private function encode_bare_ampersands( $markup ) {
+		return preg_replace( '/&(?!(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);)/', '&amp;', $markup );
 	}
 
 	/**
@@ -91,6 +145,8 @@ class Push_MD_Markdown_Consumer {
 		$markup = preg_replace( '/<!--\s+\/?wp:[^>]+-->\n?/', '', $markup );
 		// Remove wp-specific CSS classes that only make sense in the block editor.
 		$markup = preg_replace( '/ class="wp-block-[^"]*"/', '', $markup );
+		// Normalise empty paragraphs left by block conversion boundaries.
+		$markup = preg_replace( '#<p>\s*</p>#', '', $markup );
 		// Normalise excess blank lines left by the removal.
 		$markup = preg_replace( "/\n{3,}/", "\n\n", $markup );
 		return trim( $markup );
