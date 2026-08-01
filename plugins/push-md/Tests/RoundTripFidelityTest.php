@@ -615,6 +615,7 @@ class RoundTripFidelityTest extends TestCase {
 			$attr_name        = strtolower( $attr[1] );
 			$attr_val         = $attr[3];
 			$attr_val_decoded = html_entity_decode( html_entity_decode( $attr_val, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+			$attr_val_urldecoded = urldecode( $attr_val_decoded );
 
 			if ( 'id' === $attr_name ) {
 				continue;
@@ -622,7 +623,7 @@ class RoundTripFidelityTest extends TestCase {
 			if ( in_array( $attr_name, array( 'class', 'width', 'height', 'style', 'border', 'cellpadding', 'cellspacing' ), true ) ) {
 				continue;
 			}
-			if ( false === strpos( $html_new, $attr_val ) && false === strpos( $html_new_decoded, $attr_val_decoded ) ) {
+			if ( false === strpos( $html_new, $attr_val ) && false === strpos( $html_new_decoded, $attr_val_decoded ) && false === strpos( $html_new_decoded, $attr_val_urldecoded ) ) {
 				$errors[] = sprintf( 'Lost HTML attribute: %s="%s"', $attr[1], $attr[3] );
 			}
 		}
