@@ -80,6 +80,9 @@ class Push_MD_HTML_Converter {
 				// from parsing them as raw HTML tags.
 				if ( ! in_array( 'CODE', $active_inlines, true ) ) {
 					$text = str_replace( array( '<', '>' ), array( '\<', '\>' ), $text );
+					// Escape ordered list markers (e.g. "1. " or "2) ") at the beginning of lines or text nodes
+					// to prevent them from being parsed as Markdown ordered lists (which would cause the number to be lost).
+					$text = preg_replace( '/^(\s*\d+)([\.\)])(\s+)/m', '$1\\\\$2$3', $text );
 				}
 				
 				$output .= $text;
