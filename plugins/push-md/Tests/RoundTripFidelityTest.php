@@ -754,7 +754,18 @@ class RoundTripFidelityTest extends TestCase {
 		$clean_html = preg_replace( '#<svg\b[^>]*>.*?</svg>#is', '', $clean_html );
 		$clean_html = preg_replace( '#</?(p|h[1-6]|li|ul|ol|div|blockquote|td|th|caption|figcaption|aside|section|article)\b[^>]*>#i', ' ', $clean_html );
 
-		$all_text = strip_tags( html_entity_decode( html_entity_decode( $clean_html, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
+		$all_text = '';
+		if ( class_exists( 'WP_HTML_Tag_Processor' ) ) {
+			$text_processor = new WP_HTML_Tag_Processor( html_entity_decode( $clean_html, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
+			while ( $text_processor->next_token() ) {
+				if ( '#text' === $text_processor->get_token_type() ) {
+					$all_text .= ' ' . $text_processor->get_modifiable_text();
+				}
+			}
+			$all_text = html_entity_decode( $all_text, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		} else {
+			$all_text = strip_tags( html_entity_decode( html_entity_decode( $clean_html, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) );
+		}
 		$all_text = str_replace( array( '’', '‘', '”', '“', '–', '—' ), array( "'", "'", '"', '"', '-', '-' ), $all_text );
 		preg_match_all( '/[\p{L}\p{N}]+/u', mb_strtolower( $all_text, 'UTF-8' ), $word_matches );
 		$words_array = ! empty( $word_matches[0] ) ? $word_matches[0] : array();

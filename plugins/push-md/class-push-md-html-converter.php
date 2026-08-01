@@ -75,6 +75,12 @@ class Push_MD_HTML_Converter {
 						continue;
 					}
 				}
+
+				// If we are not inside a code block, escape literal < and > to prevent Markdown
+				// from parsing them as raw HTML tags.
+				if ( ! in_array( 'CODE', $active_inlines, true ) ) {
+					$text = str_replace( array( '<', '>' ), array( '\<', '\>' ), $text );
+				}
 				
 				$output .= $text;
 				continue;
