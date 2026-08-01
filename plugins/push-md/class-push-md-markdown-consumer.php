@@ -62,8 +62,7 @@ class Push_MD_Markdown_Consumer {
 		$inner_consumer = new MarkdownConsumer( $this->markdown );
 		$raw_result     = $inner_consumer->consume();
 
-		// Decode inline HTML tags that were escaped during Markdown parsing.
-		$block_markup = $this->unescape_inline_html_tags( $raw_result->get_block_markup() );
+		$block_markup = $raw_result->get_block_markup();
 		if ( ! $this->use_block_comments ) {
 			$block_markup = $this->strip_block_comments( $block_markup );
 		}

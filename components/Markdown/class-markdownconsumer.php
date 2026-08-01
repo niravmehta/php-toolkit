@@ -205,7 +205,7 @@ class MarkdownConsumer implements DataFormatConsumer {
 						 *
 						 * @TODO: Patch the commonmark parser OR use a diffent parser.
 						 */
-						$this->append_content( $node->getLiteral() );
+						$this->append_content( htmlspecialchars( $node->getLiteral(), ENT_NOQUOTES | ENT_HTML5, 'UTF-8' ) );
 						break;
 
 					case ExtensionInline\Code::class:
@@ -225,7 +225,7 @@ class MarkdownConsumer implements DataFormatConsumer {
 						break;
 
 					case ExtensionInline\HtmlInline::class:
-						$this->append_content( htmlspecialchars( $node->getLiteral() ) );
+						$this->append_content( $node->getLiteral() );
 						break;
 
 					case ExtensionInline\Image::class:
