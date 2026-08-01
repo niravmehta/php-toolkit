@@ -30,6 +30,10 @@ class Push_MD_HTML_Converter {
 			return (string) $filtered;
 		}
 
+		// Normalize <a href="..."><figure>...</figure></a> to <figure><a href="...">...</a></figure>
+		// to ensure the figure block structure is preserved in Markdown and survives the round-trip.
+		$html = preg_replace( '#(<a\b[^>]*>)\s*(<figure\b[^>]*>)(.*?)(</figure>)\s*</a>#is', '$2$1$3</a>$4', $html );
+
 		// Convert hybrid HTML image-markdown links `[<img...src="SRC"...>](URL)` to `<a href="URL"><img ...></a>`.
 		$html = preg_replace( '/\[\s*(<img[^>]+>)\s*\]\s*\(([^)]+)\)/i', '<a href="$2">$1</a>', $html );
 
@@ -242,7 +246,9 @@ class Push_MD_HTML_Converter {
 						$inner = $processor->get_inner_html();
 						if ( false !== $inner ) {
 							$table_md = self::table_to_markdown( $inner );
-							if ( '' !== $table_md ) {
+							if ( false === $table_md ) {
+								$output = rtrim( $output ) . "\n\n" . $processor->get_outer_html() . "\n\n";
+							} elseif ( '' !== $table_md ) {
 								$output = rtrim( $output ) . "\n\n" . $table_md . "\n";
 							}
 							$processor->skip_to_closer();
@@ -312,7 +318,7 @@ class Push_MD_HTML_Converter {
 						if ( null === $href ) {
 							$href = '';
 						}
-						array_push( $link_stack, self::escape_url( $href ) );
+						array_push( $link_stack, array( 'href' => self::escape_url( $href ), 'start_len' => strlen( $output ) + 1 ) );
 						$output .= '[';
 						break;
 
@@ -427,7 +433,9 @@ class Push_MD_HTML_Converter {
 						break;
 
 					case 'A':
-						$href = ! empty( $link_stack ) ? array_pop( $link_stack ) : '';
+						$link_data = ! empty( $link_stack ) ? array_pop( $link_stack ) : array( 'href' => '', 'start_len' => strlen( $output ) );
+						$href      = $link_data['href'];
+						$start_len = $link_data['start_len'];
 						// Markdown link text cannot represent trailing whitespace, so move any
 						// trailing spaces inside the anchor text outside the link destination.
 						// This preserves the word boundary for text that follows the link.
@@ -436,7 +444,29 @@ class Push_MD_HTML_Converter {
 							$trailing_ws = $ws_matches[0];
 							$output      = substr( $output, 0, -strlen( $trailing_ws ) );
 						}
-						$output .= '](' . $href . ')' . $trailing_ws;
+						
+						$link_text_len = strlen( $output ) - $start_len;
+						$link_text     = $link_text_len > 0 ? substr( $output, -$link_text_len ) : '';
+						
+						// Markdown links cannot span blocks or contain newlines.
+						if ( strpos( $link_text, "\n" ) !== false ) {
+							$clean_text = preg_replace( '/\s+/', ' ', $link_text );
+							$clean_text = trim( $clean_text );
+							$output = substr( $output, 0, -$link_text_len ) . $clean_text;
+							$link_text = $clean_text;
+							$link_text_len = strlen( $link_text );
+						}
+
+						// If the link text matches the href, output it as an autolink `<url>`.
+						if ( '' === trim( $link_text ) ) {
+							$output = substr( $output, 0, -( $link_text_len + 1 ) ); // Remove '['
+							$output .= '<a href="' . $href . '">' . $link_text . '</a>';
+						} elseif ( $link_text === $href && '' !== $href ) {
+							$output = substr( $output, 0, -( $link_text_len + 1 ) ) . '<' . $href . '>';
+						} else {
+							$output .= '](' . $href . ')';
+						}
+						$output .= $trailing_ws;
 						break;
 				}
 			}
@@ -628,7 +658,7 @@ class Push_MD_HTML_Converter {
 			$header = array_shift( $rows );
 		}
 		if ( empty( $header ) ) {
-			return '';
+			return false;
 		}
 
 		$col_widths = array_map( 'strlen', $header );
@@ -728,7 +758,7 @@ class Push_MD_HTML_Converter {
 		}
 
 		// 1. Tag name preservation.
-		$default_preserved_tags = array( 'figure', 'figcaption', 'iframe', 'form', 'script', 'style', 'svg', 'canvas' );
+		$default_preserved_tags = array( 'figure', 'figcaption', 'iframe', 'form', 'script', 'style', 'svg', 'canvas', 'video', 'audio', 'picture', 'source', 'track' );
 		if ( function_exists( 'apply_filters' ) ) {
 			$preserved_tags = apply_filters( 'push_md_preserved_html_tags', $default_preserved_tags, $tag );
 		} else {
