@@ -923,6 +923,21 @@ MD;
 		$this->assertEquals( array( 'Workflow', 'Automation' ), $normalized_multi['seo_keywords'] );
 	}
 
+	public function test_last_modified_frontmatter_export_and_import() {
+		$post                    = $this->create_dummy_post( array( 'ID' => 505 ) );
+		$post->post_modified_gmt = '2026-08-04 23:50:00';
+		$post->post_modified     = '2026-08-05 05:20:00';
+
+		$markdown = Push_MD_Plugin::export_post_to_markdown( $post );
+		$this->assertStringContainsString( 'last_modified: "2026-08-04T23:50:00Z"', $markdown );
+
+		$metadata = array(
+			'last_modified' => '2026-08-04T23:50:00Z',
+		);
+		$parsed   = $this->invoke_private( 'frontmatter_modified_date_to_mysql_gmt', array( $metadata ) );
+		$this->assertEquals( '2026-08-04 23:50:00', $parsed );
+	}
+
 	public function testDevHooksExecutionForFrontmatterAndAuthor() {
 		add_filter(
 			'push_md_export_frontmatter',
