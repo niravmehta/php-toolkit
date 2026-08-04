@@ -955,4 +955,53 @@ MD;
 		$this->assertArrayHasKey( 'tags', $metadata );
 		$this->assertEquals( array( 'Opt-in Forms', 'Lead Capture' ), $metadata['tags'] );
 	}
+
+	public function test_author_voice_override_custom_field() {
+		$saved_user_meta = array();
+
+		add_filter(
+			'push_md_export_author',
+			function ( $author_data, $user ) {
+				unset( $user );
+				$voice_override = 'formal_executive';
+				if ( '' !== $voice_override ) {
+					$author_data['voice_override'] = $voice_override;
+				}
+				return $author_data;
+			},
+			10,
+			2
+		);
+
+		add_action(
+			'push_md_import_author',
+			function ( $user_id, $item ) use ( &$saved_user_meta ) {
+				if ( isset( $item['voice_override'] ) ) {
+					$saved_user_meta[ $user_id ] = $item['voice_override'];
+				}
+			},
+			10,
+			2
+		);
+
+		$authors_md = $this->invoke_private( 'export_authors_markdown' );
+		$this->assertStringContainsString( 'voice_override: "formal_executive"', $authors_md );
+
+		do_action( 'push_md_import_author', 42, array( 'voice_override' => 'formal_executive' ) );
+		$this->assertArrayHasKey( 42, $saved_user_meta );
+		$this->assertEquals( 'formal_executive', $saved_user_meta[42] );
+	}
+
+	public function test_author_meta_keys_declarative_filter() {
+		add_filter(
+			'push_md_author_meta_keys',
+			function ( $keys ) {
+				$keys[] = 'voice_override';
+				return $keys;
+			}
+		);
+
+		$authors_md = $this->invoke_private( 'export_authors_markdown' );
+		$this->assertStringContainsString( 'authors:', $authors_md );
+	}
 }

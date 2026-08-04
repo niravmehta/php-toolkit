@@ -49,6 +49,12 @@ class HtmlMarkdownConversionTest extends TestCase {
 		$this->assertStringContainsString( "First paragraph.\n\nSecond paragraph.", $markdown );
 	}
 
+	public function test_raw_text_paragraphs_preserve_blank_line_separator() {
+		$html     = "First paragraph line 1.\n\nSecond paragraph line 2.";
+		$markdown = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( "First paragraph line 1.\n\nSecond paragraph line 2.", $markdown );
+	}
+
 	public function test_unordered_list_items_use_dash_bullet() {
 		$html     = '<ul><li>Alpha</li><li>Beta</li><li>Gamma</li></ul>';
 		$markdown = Push_MD_HTML_Converter::convert( $html );
