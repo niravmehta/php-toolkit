@@ -958,10 +958,6 @@ class Push_MD_Plugin {
 						'seo_description',
 						'seo_focus_keyword',
 						'seo_keywords',
-						'seo-title',
-						'seo-description',
-						'seo-focus-keyword',
-						'seo-keywords',
 					),
 					$post_type
 				)
@@ -2784,10 +2780,6 @@ class Push_MD_Plugin {
 			'seo_description',
 			'seo_focus_keyword',
 			'seo_keywords',
-			'seo-title',
-			'seo-description',
-			'seo-focus-keyword',
-			'seo-keywords',
 		);
 		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
 		if ( is_array( $extra_post_meta_keys ) ) {
@@ -5935,10 +5927,6 @@ class Push_MD_Plugin {
 			'seo_description',
 			'seo_focus_keyword',
 			'seo_keywords',
-			'seo-title',
-			'seo-description',
-			'seo-focus-keyword',
-			'seo-keywords',
 		);
 		if ( ! is_array( $keys ) ) {
 			return $seo_keys;
@@ -5977,17 +5965,17 @@ class Push_MD_Plugin {
 			return;
 		}
 
-		$title_val = isset( $metadata['seo_title'] ) ? $metadata['seo_title'] : ( isset( $metadata['seo-title'] ) ? $metadata['seo-title'] : null );
+		$title_val = isset( $metadata['seo_title'] ) ? $metadata['seo_title'] : null;
 		if ( null !== $title_val ) {
 			self::update_post_seo_meta( $post_id, 'title', $title_val );
 		}
 
-		$desc_val = isset( $metadata['seo_description'] ) ? $metadata['seo_description'] : ( isset( $metadata['seo-description'] ) ? $metadata['seo-description'] : null );
+		$desc_val = isset( $metadata['seo_description'] ) ? $metadata['seo_description'] : null;
 		if ( null !== $desc_val ) {
 			self::update_post_seo_meta( $post_id, 'description', $desc_val );
 		}
 
-		$kw_val = isset( $metadata['seo_focus_keyword'] ) ? $metadata['seo_focus_keyword'] : ( isset( $metadata['seo-focus-keyword'] ) ? $metadata['seo-focus-keyword'] : ( isset( $metadata['seo_keywords'] ) ? $metadata['seo_keywords'] : ( isset( $metadata['seo-keywords'] ) ? $metadata['seo-keywords'] : null ) ) );
+		$kw_val = isset( $metadata['seo_focus_keyword'] ) ? $metadata['seo_focus_keyword'] : ( isset( $metadata['seo_keywords'] ) ? $metadata['seo_keywords'] : null );
 		if ( null !== $kw_val ) {
 			self::update_post_seo_meta( $post_id, 'focus_keyword', $kw_val );
 		}
