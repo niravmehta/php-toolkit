@@ -940,6 +940,7 @@ class Push_MD_Plugin {
 						'id',
 						'title',
 						'date',
+						'last_modified',
 						'status',
 						'description',
 						'excerpt',
@@ -2076,6 +2077,11 @@ class Push_MD_Plugin {
 			'date'   => array( self::format_post_date_for_frontmatter( $post ) ),
 			'status' => array( self::frontmatter_status_from_post_status( $post->post_status ) ),
 		);
+
+		$last_modified = self::format_post_modified_date_for_frontmatter( $post );
+		if ( '' !== $last_modified ) {
+			$metadata['last_modified'] = array( $last_modified );
+		}
 		if ( '' !== trim( $post->post_excerpt ) ) {
 			$metadata['description'] = array( $post->post_excerpt );
 		}
@@ -2747,6 +2753,7 @@ class Push_MD_Plugin {
 			'title',
 			'slug',
 			'date',
+			'last_modified',
 			'status',
 			'description',
 			'excerpt',
@@ -2839,6 +2846,12 @@ class Push_MD_Plugin {
 			$postarr['post_date_gmt'] = $post_date_gmt;
 			$postarr['post_date']     = get_date_from_gmt( $post_date_gmt );
 		}
+
+		$post_modified_gmt = self::frontmatter_modified_date_to_mysql_gmt( $metadata );
+		if ( '' !== $post_modified_gmt ) {
+			$postarr['post_modified_gmt'] = $post_modified_gmt;
+			$postarr['post_modified']     = get_date_from_gmt( $post_modified_gmt );
+		}
 		if ( array_key_exists( 'excerpt', $metadata ) ) {
 			$postarr['post_excerpt'] = $metadata['excerpt'];
 		} elseif ( array_key_exists( 'description', $metadata ) ) {
@@ -2860,6 +2873,20 @@ class Push_MD_Plugin {
 			);
 		}
 
+		$filter_callback = null;
+		if ( '' !== $post_modified_gmt ) {
+			$filter_callback = function ( $data, $postarr_arg ) use ( $post_modified_gmt ) {
+				if ( is_array( $data ) && isset( $postarr_arg['post_modified_gmt'] ) && $postarr_arg['post_modified_gmt'] === $post_modified_gmt ) {
+					$data['post_modified_gmt'] = $post_modified_gmt;
+					if ( function_exists( 'get_date_from_gmt' ) ) {
+						$data['post_modified'] = get_date_from_gmt( $post_modified_gmt );
+					}
+				}
+				return $data;
+			};
+			add_filter( 'wp_insert_post_data', $filter_callback, PHP_INT_MAX, 2 );
+		}
+
 		if ( $existing_post ) {
 			$existing_post = self::restore_trashed_post_before_update( $existing_post );
 			$postarr['ID'] = $existing_post->ID;
@@ -2868,8 +2895,33 @@ class Push_MD_Plugin {
 			$post_id = wp_insert_post( wp_slash( $postarr ), true );
 		}
 
+		if ( $filter_callback ) {
+			remove_filter( 'wp_insert_post_data', $filter_callback, PHP_INT_MAX );
+		}
+
 		if ( is_wp_error( $post_id ) ) {
 			throw new Exception( esc_html( $post_id->get_error_message() ) );
+		}
+
+		if ( '' !== $post_modified_gmt && $post_id > 0 ) {
+			global $wpdb;
+			if ( isset( $wpdb->posts ) ) {
+				$local_mod = function_exists( 'get_date_from_gmt' ) ? get_date_from_gmt( $post_modified_gmt ) : $post_modified_gmt;
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+				$wpdb->update(
+					$wpdb->posts,
+					array(
+						'post_modified'     => $local_mod,
+						'post_modified_gmt' => $post_modified_gmt,
+					),
+					array( 'ID' => $post_id ),
+					array( '%s', '%s' ),
+					array( '%d' )
+				);
+				if ( function_exists( 'clean_post_cache' ) ) {
+					clean_post_cache( $post_id );
+				}
+			}
 		}
 
 		if ( isset( $metadata['categories'] ) ) {
@@ -3940,6 +3992,36 @@ class Push_MD_Plugin {
 		}
 
 		return gmdate( 'Y-m-d\TH:i:s\Z', $timestamp );
+	}
+
+	private static function format_post_modified_date_for_frontmatter( WP_Post $post ) {
+		$timestamp = self::timestamp_from_gmt_string( $post->post_modified_gmt );
+		if (
+			false === $timestamp &&
+			is_string( $post->post_modified ) &&
+			'' !== $post->post_modified &&
+			'0000-00-00 00:00:00' !== $post->post_modified
+		) {
+			$timestamp = self::timestamp_from_gmt_string( get_gmt_from_date( $post->post_modified ) );
+		}
+		if ( false === $timestamp ) {
+			return '';
+		}
+
+		return gmdate( 'Y-m-d\TH:i:s\Z', $timestamp );
+	}
+
+	private static function frontmatter_modified_date_to_mysql_gmt( $metadata ) {
+		if ( isset( $metadata['last_modified'] ) && '' !== trim( (string) $metadata['last_modified'] ) ) {
+			$parsed = self::parse_frontmatter_date( $metadata['last_modified'] );
+			if ( '' === $parsed ) {
+				throw new Exception( 'Push rejected because Markdown front matter last_modified is invalid.' );
+			}
+
+			return $parsed;
+		}
+
+		return '';
 	}
 
 	private static function frontmatter_date_to_mysql_gmt( $metadata ) {
