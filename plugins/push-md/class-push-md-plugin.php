@@ -2114,6 +2114,19 @@ class Push_MD_Plugin {
 			}
 		}
 
+		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post );
+		if ( is_array( $extra_post_meta_keys ) ) {
+			foreach ( $extra_post_meta_keys as $meta_key ) {
+				$meta_key = (string) $meta_key;
+				if ( '' !== $meta_key && ! isset( $metadata[ $meta_key ] ) ) {
+					$val = get_post_meta( $post->ID, $meta_key, true );
+					if ( '' !== $val && false !== $val && null !== $val ) {
+						$metadata[ $meta_key ] = is_array( $val ) ? $val : array( (string) $val );
+					}
+				}
+			}
+		}
+
 		$metadata = apply_filters( 'push_md_export_frontmatter', $metadata, $post );
 
 		$producer = new Push_MD_Markdown_Producer(
@@ -2734,31 +2747,42 @@ class Push_MD_Plugin {
 		$metadata = self::extract_markdown_metadata_with_local_fallback( $markdown, $result );
 
 		self::reject_path_identity_frontmatter( $metadata );
+		$supported_keys       = array(
+			'id',
+			'title',
+			'slug',
+			'date',
+			'status',
+			'description',
+			'excerpt',
+			'author',
+			'categories',
+			'tags',
+			'featured_image',
+			'seo_title',
+			'seo_description',
+			'seo_focus_keyword',
+			'seo_keywords',
+			'seo-title',
+			'seo-description',
+			'seo-focus-keyword',
+			'seo-keywords',
+		);
+		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
+		if ( is_array( $extra_post_meta_keys ) ) {
+			foreach ( $extra_post_meta_keys as $meta_key ) {
+				$meta_key = (string) $meta_key;
+				if ( '' !== $meta_key && ! in_array( $meta_key, $supported_keys, true ) ) {
+					$supported_keys[] = $meta_key;
+				}
+			}
+		}
+
 		$metadata = self::normalize_supported_frontmatter(
 			$metadata,
 			apply_filters(
 				'push_md_supported_frontmatter_keys',
-				array(
-					'id',
-					'title',
-					'slug',
-					'date',
-					'status',
-					'description',
-					'excerpt',
-					'author',
-					'categories',
-					'tags',
-					'featured_image',
-					'seo_title',
-					'seo_description',
-					'seo_focus_keyword',
-					'seo_keywords',
-					'seo-title',
-					'seo-description',
-					'seo-focus-keyword',
-					'seo-keywords',
-				),
+				$supported_keys,
 				$post_type
 			)
 		);
@@ -2866,6 +2890,16 @@ class Push_MD_Plugin {
 		}
 		if ( isset( $metadata['featured_image'] ) ) {
 			self::assign_post_featured_image( $post_id, $metadata['featured_image'] );
+		}
+
+		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
+		if ( is_array( $extra_post_meta_keys ) ) {
+			foreach ( $extra_post_meta_keys as $meta_key ) {
+				$meta_key = (string) $meta_key;
+				if ( '' !== $meta_key && isset( $metadata[ $meta_key ] ) ) {
+					update_post_meta( $post_id, $meta_key, $metadata[ $meta_key ] );
+				}
+			}
 		}
 
 		do_action( 'push_md_import_frontmatter', $post_id, $metadata, $postarr, $existing_post );
@@ -5239,7 +5273,7 @@ class Push_MD_Plugin {
 				if ( ! self::user_can_edit_any_supported_post_type( $user ) ) {
 					continue;
 				}
-				$author_data = array(
+				$author_data     = array(
 					'user_login'    => $user->user_login,
 					'display_name'  => $user->display_name,
 					'first_name'    => get_user_meta( $user->ID, 'first_name', true ),
@@ -5248,6 +5282,19 @@ class Push_MD_Plugin {
 					'user_nicename' => $user->user_nicename,
 					'description'   => get_user_meta( $user->ID, 'description', true ),
 				);
+				$extra_meta_keys = apply_filters( 'push_md_author_meta_keys', array(), $user );
+				if ( is_array( $extra_meta_keys ) ) {
+					foreach ( $extra_meta_keys as $meta_key ) {
+						$meta_key = (string) $meta_key;
+						if ( '' !== $meta_key && ! isset( $author_data[ $meta_key ] ) ) {
+							$val = get_user_meta( $user->ID, $meta_key, true );
+							if ( '' !== $val && false !== $val && null !== $val ) {
+								$author_data[ $meta_key ] = $val;
+							}
+						}
+					}
+				}
+
 				$author_data = apply_filters( 'push_md_export_author', $author_data, $user );
 				$list[]      = $author_data;
 			}
@@ -5544,6 +5591,17 @@ class Push_MD_Plugin {
 			}
 
 			wp_update_user( $userdata );
+
+			$extra_meta_keys = apply_filters( 'push_md_author_meta_keys', array(), $user );
+			if ( is_array( $extra_meta_keys ) ) {
+				foreach ( $extra_meta_keys as $meta_key ) {
+					$meta_key = (string) $meta_key;
+					if ( '' !== $meta_key && isset( $item[ $meta_key ] ) ) {
+						update_user_meta( $user->ID, $meta_key, $item[ $meta_key ] );
+					}
+				}
+			}
+
 			do_action( 'push_md_import_author', $user->ID, $item );
 		}
 	}
