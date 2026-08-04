@@ -865,13 +865,14 @@ MD;
 		$markdown = Push_MD_Plugin::export_post_to_markdown( $post );
 		$this->assertStringContainsString( 'seo_title: "SEO Title"', $markdown );
 		$this->assertStringContainsString( 'seo_description: "SEO Description"', $markdown );
-		$this->assertStringContainsString( 'seo_focus_keyword: "SEO Keyword"', $markdown );
+		$this->assertStringContainsString( 'SEO Keyword', $markdown );
+		$this->assertStringNotContainsString( 'seo_focus_keyword', $markdown );
 		$this->assertStringNotContainsString( 'rank_math_title', $markdown );
 
 		$metadata = array(
-			'seo_title'         => 'New SEO Title',
-			'seo_description'   => 'New SEO Description',
-			'seo_focus_keyword' => 'New SEO Keyword',
+			'seo_title'       => 'New SEO Title',
+			'seo_description' => 'New SEO Description',
+			'seo_keywords'    => array( 'Primary KW', 'Secondary KW' ),
 		);
 		$this->invoke_private( 'handle_seo_import_frontmatter', array( 101, $metadata, array(), null ) );
 
@@ -879,8 +880,47 @@ MD;
 		$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['rank_math_title'] );
 		$this->assertEquals( 'New SEO Description', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_metadesc'] );
 		$this->assertEquals( 'New SEO Description', $GLOBALS['mock_post_meta'][101]['rank_math_description'] );
-		$this->assertEquals( 'New SEO Keyword', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_focuskw'] );
-		$this->assertEquals( 'New SEO Keyword', $GLOBALS['mock_post_meta'][101]['rank_math_focus_keyword'] );
+		$this->assertEquals( 'Primary KW', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_focuskw'] );
+		$this->assertEquals( '[{"keyword":"Secondary KW","score":"ok"}]', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_focuskeywords'] );
+		$this->assertEquals( 'Primary KW, Secondary KW', $GLOBALS['mock_post_meta'][101]['rank_math_focus_keyword'] );
+	}
+
+	public function test_seo_keywords_pull_and_rank_math_priority() {
+		$GLOBALS['mock_post_meta'][202] = array(
+			'rank_math_focus_keyword' => 'digital marketing, SEO tips, wordpress plugin',
+		);
+
+		$post     = $this->create_dummy_post( array( 'ID' => 202 ) );
+		$markdown = Push_MD_Plugin::export_post_to_markdown( $post );
+
+		$this->assertStringContainsString( 'digital marketing', $markdown );
+		$this->assertStringContainsString( 'SEO tips', $markdown );
+		$this->assertStringContainsString( 'wordpress plugin', $markdown );
+
+		$metadata = array(
+			'seo_keywords' => 'marketing, optimization',
+		);
+		$this->invoke_private( 'handle_seo_import_frontmatter', array( 303, $metadata, array(), null ) );
+		$this->assertEquals( 'marketing, optimization', $GLOBALS['mock_post_meta'][303]['rank_math_focus_keyword'] );
+
+		$normalized = $this->invoke_private( 'normalize_supported_frontmatter', array( array( 'seo_keywords' => array( 'Workflow' ) ), array( 'seo_keywords' ) ) );
+		$this->assertEquals( array( 'Workflow' ), $normalized['seo_keywords'] );
+	}
+
+	public function test_yaml_list_single_and_multi_items_frontmatter() {
+		$markdown_single = "---\ntitle: \"Test\"\nseo_keywords:\n  - \"Workflow\"\n---\n\nContent";
+		$parsed_single   = $this->invoke_private( 'parse_frontmatter_block_local', array( $markdown_single ) );
+		$this->assertEquals( array( 'Workflow' ), $parsed_single['seo_keywords'] );
+
+		$normalized_single = $this->invoke_private( 'normalize_supported_frontmatter', array( $parsed_single, array( 'title', 'seo_keywords' ) ) );
+		$this->assertEquals( array( 'Workflow' ), $normalized_single['seo_keywords'] );
+
+		$markdown_multi = "---\ntitle: \"Test\"\nseo_keywords:\n  - \"Workflow\"\n  - \"Automation\"\n---\n\nContent";
+		$parsed_multi   = $this->invoke_private( 'parse_frontmatter_block_local', array( $markdown_multi ) );
+		$this->assertEquals( array( 'Workflow', 'Automation' ), $parsed_multi['seo_keywords'] );
+
+		$normalized_multi = $this->invoke_private( 'normalize_supported_frontmatter', array( $parsed_multi, array( 'title', 'seo_keywords' ) ) );
+		$this->assertEquals( array( 'Workflow', 'Automation' ), $normalized_multi['seo_keywords'] );
 	}
 
 	public function testDevHooksExecutionForFrontmatterAndAuthor() {

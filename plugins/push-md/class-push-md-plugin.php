@@ -956,7 +956,6 @@ class Push_MD_Plugin {
 						'featured_image',
 						'seo_title',
 						'seo_description',
-						'seo_focus_keyword',
 						'seo_keywords',
 					),
 					$post_type
@@ -2778,7 +2777,6 @@ class Push_MD_Plugin {
 			'featured_image',
 			'seo_title',
 			'seo_description',
-			'seo_focus_keyword',
 			'seo_keywords',
 		);
 		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
@@ -4086,7 +4084,10 @@ class Push_MD_Plugin {
 			$allowed[ $key ] = true;
 		}
 
-		$allowed_array_keys = array( 'tags', 'categories' );
+		$allowed_array_keys = apply_filters(
+			'push_md_multi_value_frontmatter_keys',
+			array( 'categories', 'tags', 'seo_keywords' )
+		);
 
 		$normalized = array();
 		foreach ( $metadata as $key => $value ) {
@@ -5925,7 +5926,6 @@ class Push_MD_Plugin {
 		$seo_keys = array(
 			'seo_title',
 			'seo_description',
-			'seo_focus_keyword',
 			'seo_keywords',
 		);
 		if ( ! is_array( $keys ) ) {
@@ -5950,9 +5950,9 @@ class Push_MD_Plugin {
 			$metadata['seo_description'] = array( $seo_desc );
 		}
 
-		$seo_kw = self::get_post_seo_meta( $post->ID, 'focus_keyword' );
-		if ( '' !== $seo_kw ) {
-			$metadata['seo_focus_keyword'] = array( $seo_kw );
+		$keywords = self::get_post_seo_keywords( $post->ID );
+		if ( ! empty( $keywords ) ) {
+			$metadata['seo_keywords'] = $keywords;
 		}
 
 		return $metadata;
@@ -5975,10 +5975,139 @@ class Push_MD_Plugin {
 			self::update_post_seo_meta( $post_id, 'description', $desc_val );
 		}
 
-		$kw_val = isset( $metadata['seo_focus_keyword'] ) ? $metadata['seo_focus_keyword'] : ( isset( $metadata['seo_keywords'] ) ? $metadata['seo_keywords'] : null );
-		if ( null !== $kw_val ) {
-			self::update_post_seo_meta( $post_id, 'focus_keyword', $kw_val );
+		if ( isset( $metadata['seo_keywords'] ) ) {
+			self::update_post_seo_keywords( $post_id, $metadata['seo_keywords'] );
 		}
+	}
+
+	private static function seo_meta_exists( $post_id, $meta_key ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return false;
+		}
+		if ( function_exists( 'metadata_exists' ) && metadata_exists( 'post', $post_id, $meta_key ) ) {
+			return true;
+		}
+		$val = get_post_meta( $post_id, $meta_key, true );
+		return '' !== $val && false !== $val && null !== $val;
+	}
+
+	private static function get_post_seo_keywords( $post_id ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return array();
+		}
+
+		$keywords = array();
+
+		$rm_val = get_post_meta( $post_id, 'rank_math_focus_keyword', true );
+		if ( '' !== trim( (string) $rm_val ) ) {
+			$split = explode( ',', (string) $rm_val );
+			foreach ( $split as $kw ) {
+				$kw = trim( $kw );
+				if ( '' !== $kw && ! in_array( $kw, $keywords, true ) ) {
+					$keywords[] = $kw;
+				}
+			}
+			if ( ! empty( $keywords ) ) {
+				return $keywords;
+			}
+		}
+
+		$primary = get_post_meta( $post_id, '_yoast_wpseo_focuskw', true );
+		if ( '' !== trim( (string) $primary ) ) {
+			$keywords[] = trim( (string) $primary );
+		}
+		$additional_json = get_post_meta( $post_id, '_yoast_wpseo_focuskeywords', true );
+		if ( ! empty( $additional_json ) && is_string( $additional_json ) ) {
+			$decoded = json_decode( $additional_json, true );
+			if ( is_array( $decoded ) ) {
+				foreach ( $decoded as $item ) {
+					if ( is_array( $item ) && ! empty( $item['keyword'] ) ) {
+						$kw = trim( (string) $item['keyword'] );
+						if ( '' !== $kw && ! in_array( $kw, $keywords, true ) ) {
+							$keywords[] = $kw;
+						}
+					}
+				}
+			}
+		}
+
+		return $keywords;
+	}
+
+	private static function update_post_seo_keywords( $post_id, $val ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return;
+		}
+
+		$keywords       = self::parse_seo_keywords_input( $val );
+		$yoast_active   = self::is_yoast_seo_active();
+		$rm_active      = self::is_rank_math_active();
+		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_focus_keyword' );
+		$has_yoast_meta = self::seo_meta_exists( $post_id, '_yoast_wpseo_focuskw' );
+
+		$primary_kw     = ! empty( $keywords ) ? $keywords[0] : '';
+		$additional_kws = count( $keywords ) > 1 ? array_slice( $keywords, 1 ) : array();
+
+		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
+		$update_yoast = $yoast_active || $has_yoast_meta;
+
+		if ( $update_rm ) {
+			$rm_str = implode( ', ', $keywords );
+			update_post_meta( $post_id, 'rank_math_focus_keyword', $rm_str );
+		}
+
+		if ( $update_yoast ) {
+			update_post_meta( $post_id, '_yoast_wpseo_focuskw', $primary_kw );
+
+			$existing_scores = array();
+			$existing_json   = get_post_meta( $post_id, '_yoast_wpseo_focuskeywords', true );
+			if ( ! empty( $existing_json ) && is_string( $existing_json ) ) {
+				$decoded = json_decode( $existing_json, true );
+				if ( is_array( $decoded ) ) {
+					foreach ( $decoded as $item ) {
+						if ( is_array( $item ) && isset( $item['keyword'], $item['score'] ) ) {
+							$existing_scores[ (string) $item['keyword'] ] = (string) $item['score'];
+						}
+					}
+				}
+			}
+
+			$yoast_additional = array();
+			foreach ( $additional_kws as $kw ) {
+				$score              = isset( $existing_scores[ $kw ] ) ? $existing_scores[ $kw ] : 'ok';
+				$yoast_additional[] = array(
+					'keyword' => $kw,
+					'score'   => $score,
+				);
+			}
+
+			$json_val = ! empty( $yoast_additional ) ? wp_json_encode( $yoast_additional, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) : '[]';
+			update_post_meta( $post_id, '_yoast_wpseo_focuskeywords', $json_val );
+		}
+	}
+
+	private static function parse_seo_keywords_input( $input ) {
+		$keywords = array();
+		if ( is_string( $input ) ) {
+			$input = array( $input );
+		}
+		if ( is_array( $input ) ) {
+			foreach ( $input as $item ) {
+				$item_str = (string) $item;
+				$split    = explode( ',', $item_str );
+				foreach ( $split as $kw ) {
+					$kw = trim( $kw );
+					if ( '' !== $kw && ! in_array( $kw, $keywords, true ) ) {
+						$keywords[] = $kw;
+					}
+				}
+			}
+		}
+
+		return $keywords;
 	}
 
 	private static function get_post_seo_meta( $post_id, $field ) {
@@ -5987,46 +6116,21 @@ class Push_MD_Plugin {
 			return '';
 		}
 
-		$yoast_key = '';
-		$rm_key    = '';
-		if ( 'title' === $field ) {
-			$yoast_key = '_yoast_wpseo_title';
-			$rm_key    = 'rank_math_title';
-		} elseif ( 'description' === $field ) {
-			$yoast_key = '_yoast_wpseo_metadesc';
-			$rm_key    = 'rank_math_description';
-		} elseif ( 'focus_keyword' === $field ) {
-			$yoast_key = '_yoast_wpseo_focuskw';
-			$rm_key    = 'rank_math_focus_keyword';
-		} else {
+		$rm_key    = 'title' === $field ? 'rank_math_title' : ( 'description' === $field ? 'rank_math_description' : '' );
+		$yoast_key = 'title' === $field ? '_yoast_wpseo_title' : ( 'description' === $field ? '_yoast_wpseo_metadesc' : '' );
+
+		if ( '' === $rm_key ) {
 			return '';
 		}
 
-		$yoast_active = self::is_yoast_seo_active();
-		$rm_active    = self::is_rank_math_active();
-
-		if ( $yoast_active && ! $rm_active ) {
-			$val = get_post_meta( $post_id, $yoast_key, true );
-			if ( '' !== trim( (string) $val ) ) {
-				return trim( (string) $val );
-			}
+		$rm_val = get_post_meta( $post_id, $rm_key, true );
+		if ( '' !== trim( (string) $rm_val ) ) {
+			return trim( (string) $rm_val );
 		}
 
-		if ( $rm_active && ! $yoast_active ) {
-			$val = get_post_meta( $post_id, $rm_key, true );
-			if ( '' !== trim( (string) $val ) ) {
-				return trim( (string) $val );
-			}
-		}
-
-		$val = get_post_meta( $post_id, $yoast_key, true );
-		if ( '' !== trim( (string) $val ) ) {
-			return trim( (string) $val );
-		}
-
-		$val = get_post_meta( $post_id, $rm_key, true );
-		if ( '' !== trim( (string) $val ) ) {
-			return trim( (string) $val );
+		$yoast_val = get_post_meta( $post_id, $yoast_key, true );
+		if ( '' !== trim( (string) $yoast_val ) ) {
+			return trim( (string) $yoast_val );
 		}
 
 		return '';
@@ -6041,34 +6145,26 @@ class Push_MD_Plugin {
 		$val = is_array( $val ) ? reset( $val ) : $val;
 		$val = trim( (string) $val );
 
-		$yoast_key = '';
-		$rm_key    = '';
-		if ( 'title' === $field ) {
-			$yoast_key = '_yoast_wpseo_title';
-			$rm_key    = 'rank_math_title';
-		} elseif ( 'description' === $field ) {
-			$yoast_key = '_yoast_wpseo_metadesc';
-			$rm_key    = 'rank_math_description';
-		} elseif ( 'focus_keyword' === $field ) {
-			$yoast_key = '_yoast_wpseo_focuskw';
-			$rm_key    = 'rank_math_focus_keyword';
-		} else {
+		$rm_key    = 'title' === $field ? 'rank_math_title' : ( 'description' === $field ? 'rank_math_description' : '' );
+		$yoast_key = 'title' === $field ? '_yoast_wpseo_title' : ( 'description' === $field ? '_yoast_wpseo_metadesc' : '' );
+
+		if ( '' === $rm_key ) {
 			return;
 		}
 
-		$yoast_active = self::is_yoast_seo_active();
-		$rm_active    = self::is_rank_math_active();
+		$yoast_active   = self::is_yoast_seo_active();
+		$rm_active      = self::is_rank_math_active();
+		$has_rm_meta    = self::seo_meta_exists( $post_id, $rm_key );
+		$has_yoast_meta = self::seo_meta_exists( $post_id, $yoast_key );
 
-		if ( $yoast_active ) {
-			update_post_meta( $post_id, $yoast_key, $val );
-		}
-		if ( $rm_active ) {
+		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
+		$update_yoast = $yoast_active || $has_yoast_meta;
+
+		if ( $update_rm ) {
 			update_post_meta( $post_id, $rm_key, $val );
 		}
-
-		if ( ! $yoast_active && ! $rm_active ) {
+		if ( $update_yoast ) {
 			update_post_meta( $post_id, $yoast_key, $val );
-			update_post_meta( $post_id, $rm_key, $val );
 		}
 	}
 
