@@ -76,24 +76,15 @@ class Push_MD_Markdown_Producer {
 			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
 		} else {
 			// Standard HTML or plain-text content.
-			$metadata       = $this->blocks_with_meta->get_all_metadata( array( 'first_value_only' => true ) );
-			$this->markdown = $this->frontmatter( $metadata )
+			$this->markdown = $this->frontmatter( $this->blocks_with_meta->get_all_metadata() )
 				. Push_MD_HTML_Converter::convert( $content );
 		}
+
+		$this->markdown = $this->normalize_frontmatter_single_element_arrays( $this->markdown );
 
 		return $this->markdown;
 	}
 
-	/**
-	 * Build the YAML frontmatter block.
-	 *
-	 * Mirrors the private frontmatter() method in MarkdownProducer so the
-	 * output format is identical.
-	 *
-	 * @param array $metadata Key → scalar value pairs.
-	 * @return string Frontmatter string including surrounding --- fences,
-	 *                or empty string when metadata is empty.
-	 */
 	/**
 	 * Detect whether post content contains Gutenberg block comment delimiters.
 	 *
@@ -110,6 +101,33 @@ class Push_MD_Markdown_Producer {
 		}
 		// Fallback: Gutenberg block markup always contains <!-- wp: delimiters.
 		return false !== strpos( $content, '<!-- wp:' );
+	}
+
+	private function normalize_frontmatter_single_element_arrays( $markdown ) {
+		if ( 0 !== strpos( $markdown, "---\n" ) ) {
+			return $markdown;
+		}
+
+		$end_pos = strpos( $markdown, "\n---\n", 4 );
+		if ( false === $end_pos ) {
+			return $markdown;
+		}
+
+		$frontmatter_block = substr( $markdown, 4, $end_pos - 4 );
+		$rest              = substr( $markdown, $end_pos );
+
+		$lines     = explode( "\n", $frontmatter_block );
+		$new_lines = array();
+
+		foreach ( $lines as $line ) {
+			if ( preg_match( '/^([A-Za-z0-9_-]+)\s*:\s*\[\s*("(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|[^,\]]+)\s*\]\s*$/', $line, $m ) ) {
+				$new_lines[] = $m[1] . ': ' . trim( $m[2] );
+			} else {
+				$new_lines[] = $line;
+			}
+		}
+
+		return "---\n" . implode( "\n", $new_lines ) . $rest;
 	}
 
 	private function frontmatter( $metadata ) {

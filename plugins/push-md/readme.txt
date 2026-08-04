@@ -53,7 +53,7 @@ A checkout can include:
 * `wp_guideline/skills/{slug}/SKILL.md` for Gutenberg Guidelines skills and Push MD's built-in agent skills.
 * `AGENTS.md`, `CLAUDE.md`, `.agents/skills`, and `.claude/skills` for agent guidance when available.
 
-Markdown files use a structured front matter contract supporting `title`, `date`, `status`, `excerpt` (or `description`), `author`, `categories` (supporting `"Parent > Child"` nested paths), `tags`, `featured_image`, `seo_title`, `seo_description`, and `seo_focus_keyword` (mapped to Rank Math or Yoast SEO depending on active plugin). File paths identify content.
+Markdown files use a structured front matter contract supporting `title`, `date`, `status`, `excerpt` (or `description`), `author`, `categories` (supporting `"Parent > Child"` nested paths), `tags`, `featured_image`, `seo_title`, `seo_description`, and `seo_keywords` (mapped to Rank Math or Yoast SEO depending on active plugin). File paths identify content.
 
 Unrecognized categories, tags, or authors in post front matter are strictly validated and rejected on push to prevent typos. New categories, tags, or author bio updates can be added directly via `categories.md`, `tags.md`, or `authors.md`. Developers can register custom front matter keys and user metadata handlers via the `push_md_supported_frontmatter_keys`, `push_md_export_frontmatter`, `push_md_import_frontmatter`, `push_md_export_author`, and `push_md_import_author` hooks.
 
