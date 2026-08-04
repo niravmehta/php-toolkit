@@ -5,6 +5,7 @@ vendor/
 opfs/
 node_modules
 .cursor
+.geminirules
 .context/
 rest/
 dist/
