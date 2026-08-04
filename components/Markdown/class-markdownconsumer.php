@@ -6,8 +6,7 @@ use League\CommonMark\Environment\Environment;
 use League\CommonMark\Extension\CommonMark\CommonMarkCoreExtension;
 use League\CommonMark\Extension\CommonMark\Node\Block as ExtensionBlock;
 use League\CommonMark\Extension\CommonMark\Node\Inline as ExtensionInline;
-use League\CommonMark\Extension\Strikethrough\StrikethroughExtension;
-use League\CommonMark\Extension\Table\TableExtension;
+use League\CommonMark\Extension\GithubFlavoredMarkdownExtension;
 use League\CommonMark\Extension\Strikethrough\Strikethrough;
 use League\CommonMark\Extension\Table\Table;
 use League\CommonMark\Extension\Table\TableCell;
@@ -77,8 +76,7 @@ class MarkdownConsumer implements DataFormatConsumer {
 
 		$environment = new Environment( array() );
 		$environment->addExtension( new CommonMarkCoreExtension() );
-		$environment->addExtension( new StrikethroughExtension() );
-		$environment->addExtension( new TableExtension() );
+		$environment->addExtension( new GithubFlavoredMarkdownExtension() );
 
 		$parser   = new MarkdownParser( $environment );
 		$document = $parser->parse( $markdown );
@@ -207,7 +205,7 @@ class MarkdownConsumer implements DataFormatConsumer {
 						 *
 						 * @TODO: Patch the commonmark parser OR use a diffent parser.
 						 */
-						$this->append_content( htmlspecialchars( $node->getLiteral(), ENT_NOQUOTES | ENT_HTML5, 'UTF-8' ) );
+						$this->append_content( $node->getLiteral() );
 						break;
 
 					case ExtensionInline\Code::class:
@@ -227,7 +225,7 @@ class MarkdownConsumer implements DataFormatConsumer {
 						break;
 
 					case ExtensionInline\HtmlInline::class:
-						$this->append_content( $node->getLiteral() );
+						$this->append_content( htmlspecialchars( $node->getLiteral() ) );
 						break;
 
 					case ExtensionInline\Image::class:

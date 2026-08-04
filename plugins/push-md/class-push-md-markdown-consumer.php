@@ -66,12 +66,41 @@ class Push_MD_Markdown_Consumer {
 		if ( ! $this->use_block_comments ) {
 			$block_markup = $this->strip_block_comments( $block_markup );
 		}
+		$block_markup = $this->escape_literal_angle_brackets( $block_markup );
+		$block_markup = $this->unescape_inline_html_tags( $block_markup );
 		$block_markup = $this->encode_bare_ampersands( $block_markup );
 
 		$metadata     = $raw_result->get_all_metadata();
 		$this->result = new BlocksWithMetadata( $block_markup, $metadata );
 
 		return $this->result;
+	}
+
+	/**
+	 * Escape bare angle brackets (< and >) in text nodes outside HTML tags.
+	 *
+	 * @param string $markup Output markup.
+	 * @return string Markup with literal < and > escaped as &lt; and &gt;.
+	 */
+	private function escape_literal_angle_brackets( $markup ) {
+		$tags  = 'p|h[1-6]|ul|ol|li|blockquote|figure|figcaption|aside|table|thead|tbody|tfoot|tr|th|td|hr|div|pre|code|span|a|b|i|strong|em|img|svg|canvas|sub|sup|del|s|section|article|header|footer|nav|main';
+		$parts = preg_split( '/(<!--.*?-->|<\/?(?:' . $tags . ')\b[^>]*>)/s', $markup, -1, PREG_SPLIT_DELIM_CAPTURE );
+		if ( false === $parts || 1 === count( $parts ) ) {
+			return $markup;
+		}
+
+		foreach ( $parts as $i => $part ) {
+			// Odd parts are HTML tags or comments (delimiter capture).
+			if ( 1 === $i % 2 ) {
+				continue;
+			}
+			// Escape literal < and > in text segments.
+			$part        = str_replace( '<', '&lt;', $part );
+			$part        = str_replace( '>', '&gt;', $part );
+			$parts[ $i ] = $part;
+		}
+
+		return implode( '', $parts );
 	}
 
 	/**
