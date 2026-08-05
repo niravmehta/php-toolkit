@@ -72,7 +72,7 @@ class Push_MD_HTML_Converter {
 
 			if ( '#text' === $token_type ) {
 				$text = $processor->get_modifiable_text();
-				
+
 				if ( '' === trim( $text ) ) {
 					// Ignore pure whitespace text nodes at line/block boundaries.
 					if ( '' === $output || "\n" === substr( $output, -1 ) ) {
@@ -109,7 +109,7 @@ class Push_MD_HTML_Converter {
 					// to prevent them from being parsed as Markdown ordered lists (which would cause the number to be lost).
 					$text = preg_replace( '/^(\s*\d+)([\.\)])(\s+)/m', '$1\\\\$2$3', $text );
 				}
-				
+
 				$output .= $text;
 				continue;
 			}
@@ -138,9 +138,9 @@ class Push_MD_HTML_Converter {
 							}
 							$opening_tag = '<' . strtolower( $tag ) . $attr_str . '>';
 							$closing_tag = '</' . strtolower( $tag ) . '>';
-							
+
 							$inner_md = self::convert_fragment( $inner );
-							$output = rtrim( $output ) . "\n\n" . $opening_tag . "\n\n" . trim( $inner_md ) . "\n\n" . $closing_tag . "\n\n";
+							$output   = rtrim( $output ) . "\n\n" . $opening_tag . "\n\n" . trim( $inner_md ) . "\n\n" . $closing_tag . "\n\n";
 							$processor->skip_to_closer();
 							continue;
 						}
@@ -344,7 +344,13 @@ class Push_MD_HTML_Converter {
 						if ( null === $href ) {
 							$href = '';
 						}
-						array_push( $link_stack, array( 'href' => self::escape_url( $href ), 'start_len' => strlen( $output ) + 1 ) );
+						array_push(
+							$link_stack,
+							array(
+								'href' => self::escape_url( $href ),
+								'start_len' => strlen( $output ) + 1,
+							)
+						);
 						$output .= '[';
 						break;
 
@@ -388,7 +394,7 @@ class Push_MD_HTML_Converter {
 						if ( ! empty( $list_stack ) ) {
 							$output = rtrim( $output, " \t" ) . "\n";
 						} else {
-							$output = rtrim( $output ) . "\n\n";
+							$output = rtrim( $output, "\r\n" ) . "\n\n";
 						}
 						break;
 
@@ -423,7 +429,7 @@ class Push_MD_HTML_Converter {
 								array_splice( $html_inline_stack, $html_pos, 1 );
 								$output .= '</strong>';
 							} else {
-								$output .= '**';
+								self::append_inline_closer( $output, '**' );
 							}
 						}
 						break;
@@ -438,7 +444,7 @@ class Push_MD_HTML_Converter {
 								array_splice( $html_inline_stack, $html_pos, 1 );
 								$output .= '</em>';
 							} else {
-								$output .= '*';
+								self::append_inline_closer( $output, '*' );
 							}
 						}
 						break;
@@ -453,7 +459,7 @@ class Push_MD_HTML_Converter {
 								array_splice( $html_inline_stack, $html_pos, 1 );
 								$output .= '</del>';
 							} else {
-								$output .= '~~';
+								self::append_inline_closer( $output, '~~' );
 							}
 						}
 						break;
@@ -462,12 +468,15 @@ class Push_MD_HTML_Converter {
 						$pos = array_search( 'CODE', $active_inlines, true );
 						if ( false !== $pos ) {
 							array_splice( $active_inlines, $pos, 1 );
-							$output .= '`';
+							self::append_inline_closer( $output, '`' );
 						}
 						break;
 
 					case 'A':
-						$link_data = ! empty( $link_stack ) ? array_pop( $link_stack ) : array( 'href' => '', 'start_len' => strlen( $output ) );
+						$link_data = ! empty( $link_stack ) ? array_pop( $link_stack ) : array(
+							'href' => '',
+							'start_len' => strlen( $output ),
+						);
 						$href      = $link_data['href'];
 						$start_len = $link_data['start_len'];
 						// Markdown link text cannot represent trailing whitespace, so move any
@@ -478,22 +487,22 @@ class Push_MD_HTML_Converter {
 							$trailing_ws = $ws_matches[0];
 							$output      = substr( $output, 0, -strlen( $trailing_ws ) );
 						}
-						
+
 						$link_text_len = strlen( $output ) - $start_len;
 						$link_text     = $link_text_len > 0 ? substr( $output, -$link_text_len ) : '';
-						
+
 						// Markdown links cannot span blocks or contain newlines.
-						if ( strpos( $link_text, "\n" ) !== false ) {
-							$clean_text = preg_replace( '/\s+/', ' ', $link_text );
-							$clean_text = trim( $clean_text );
-							$output = substr( $output, 0, -$link_text_len ) . $clean_text;
-							$link_text = $clean_text;
+						if ( false !== strpos( $link_text, "\n" ) ) {
+							$clean_text    = preg_replace( '/\s+/', ' ', $link_text );
+							$clean_text    = trim( $clean_text );
+							$output        = substr( $output, 0, -$link_text_len ) . $clean_text;
+							$link_text     = $clean_text;
 							$link_text_len = strlen( $link_text );
 						}
 
 						// If the link text matches the href, output it as an autolink `<url>`.
 						if ( '' === trim( $link_text ) ) {
-							$output = substr( $output, 0, -( $link_text_len + 1 ) ); // Remove '['
+							$output  = substr( $output, 0, -( $link_text_len + 1 ) ); // Remove '['.
 							$output .= '<a href="' . $href . '">' . $link_text . '</a>';
 						} elseif ( $link_text === $href && '' !== $href ) {
 							$output = substr( $output, 0, -( $link_text_len + 1 ) ) . '<' . $href . '>';
@@ -556,96 +565,43 @@ class Push_MD_HTML_Converter {
 	 * @return string Normalized fragment.
 	 */
 	private static function normalize_inline_delimiters( $text ) {
-		// 1. Triple asterisks *** (bold italic)
-		$text = preg_replace_callback(
-			'/\*\*\*([^\*\r\n]+?)\*\*\*/u',
-			function ( $matches ) {
-				$inner = $matches[1];
-				if ( '' === trim( $inner ) ) {
-					return $inner;
-				}
-				$trimmed_left   = ltrim( $inner );
-				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
-				$trimmed_both   = rtrim( $trimmed_left );
-				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
-				return $leading_space . '***' . $trimmed_both . '***' . $trailing_space;
-			},
-			$text
-		);
-
-		// 2. Double asterisks ** (bold)
-		$text = preg_replace_callback(
-			'/\*\*([^\*\r\n]+?)\*\*/u',
-			function ( $matches ) {
-				$inner = $matches[1];
-				if ( '' === trim( $inner ) ) {
-					return $inner;
-				}
-				$trimmed_left   = ltrim( $inner );
-				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
-				$trimmed_both   = rtrim( $trimmed_left );
-				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
-				return $leading_space . '**' . $trimmed_both . '**' . $trailing_space;
-			},
-			$text
-		);
-
-		// 3. Single asterisk * (italic)
-		$text = preg_replace_callback(
-			'/(?<!\*)\*([^\*\r\n]+?)\*(?!\*)/u',
-			function ( $matches ) {
-				$inner = $matches[1];
-				if ( '' === trim( $inner ) ) {
-					return $inner;
-				}
-				$trimmed_left   = ltrim( $inner );
-				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
-				$trimmed_both   = rtrim( $trimmed_left );
-				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
-				return $leading_space . '*' . $trimmed_both . '*' . $trailing_space;
-			},
-			$text
-		);
-
-		// 4. Strikethrough ~~
-		$text = preg_replace_callback(
-			'/(?<!~)~~([^~\r\n]+?)~~(?!~)/u',
-			function ( $matches ) {
-				$inner = $matches[1];
-				if ( '' === trim( $inner ) ) {
-					return $inner;
-				}
-				$trimmed_left   = ltrim( $inner );
-				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
-				$trimmed_both   = rtrim( $trimmed_left );
-				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
-				return $leading_space . '~~' . $trimmed_both . '~~' . $trailing_space;
-			},
-			$text
-		);
-
-		// 5. Inline code `
-		$text = preg_replace_callback(
-			'/(?<!`)`([^`\r\n]+?)`(?!`)/u',
-			function ( $matches ) {
-				$inner = $matches[1];
-				if ( '' === trim( $inner ) ) {
-					return $inner;
-				}
-				$trimmed_left   = ltrim( $inner );
-				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
-				$trimmed_both   = rtrim( $trimmed_left );
-				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
-				return $leading_space . '`' . $trimmed_both . '`' . $trailing_space;
-			},
-			$text
-		);
+		$text = self::shift_delimiter_spaces( $text, '/\*\*\*([^\*\r\n]+?)\*\*\*/u', '***' );
+		$text = self::shift_delimiter_spaces( $text, '/\*\*([^\*\r\n]+?)\*\*/u', '**' );
+		$text = self::shift_delimiter_spaces( $text, '/(?<!\*)\*([^\*\r\n]+?)\*(?!\*)/u', '*' );
+		$text = self::shift_delimiter_spaces( $text, '/(?<!~)~~([^~\r\n]+?)~~(?!~)/u', '~~' );
+		$text = self::shift_delimiter_spaces( $text, '/(?<!`)`([^`\r\n]+?)`(?!`)/u', '`' );
 
 		// Clean up trailing space before punctuation directly following delimiters and collapse multiple spaces (except indentation).
 		$text = preg_replace( '/(?<!^|\n)[ \t]{2,}/m', ' ', $text );
 		$text = preg_replace( '/(\*\*|\*|~~|`)[ \t]+([.,?!;:])/u', '$1$2', $text );
 
 		return $text;
+	}
+
+	/**
+	 * Helper to shift spaces inside formatting delimiters outside the delimiters.
+	 *
+	 * @param string $text      Target markdown text.
+	 * @param string $pattern   Regex pattern matching the delimited string with capture group 1 as inner text.
+	 * @param string $delimiter Formatting delimiter (e.g., '**', '*', '~~', '`').
+	 * @return string Text with shifted spaces.
+	 */
+	private static function shift_delimiter_spaces( $text, $pattern, $delimiter ) {
+		return preg_replace_callback(
+			$pattern,
+			function ( $matches ) use ( $delimiter ) {
+				$inner = $matches[1];
+				if ( '' === trim( $inner ) ) {
+					return $matches[0];
+				}
+				$trimmed_left   = ltrim( $inner );
+				$leading_space  = substr( $inner, 0, strlen( $inner ) - strlen( $trimmed_left ) );
+				$trimmed_both   = rtrim( $trimmed_left );
+				$trailing_space = substr( $trimmed_left, strlen( $trimmed_both ) );
+				return $leading_space . $delimiter . $trimmed_both . $delimiter . $trailing_space;
+			},
+			$text
+		);
 	}
 
 	/**
@@ -743,6 +699,21 @@ class Push_MD_HTML_Converter {
 	}
 
 	/**
+	 * Append an inline formatting closing delimiter, moving any trailing spaces outside.
+	 *
+	 * @param string $output    Reference to current markdown output string.
+	 * @param string $delimiter Closing delimiter (e.g. '**', '*', '~~', '`').
+	 */
+	private static function append_inline_closer( &$output, $delimiter ) {
+		$trailing_space = '';
+		if ( preg_match( '/[ \t]+$/', $output, $matches ) ) {
+			$trailing_space = $matches[0];
+			$output         = substr( $output, 0, -strlen( $trailing_space ) );
+		}
+		$output .= $delimiter . $trailing_space;
+	}
+
+	/**
 	 * Check if an HTML element should be preserved as raw HTML based on tag name or CSS classes.
 	 *
 	 * Filters:
@@ -810,14 +781,14 @@ class Push_MD_HTML_Converter {
 			return true;
 		}
 
-		// Check for ID (but ignore IDs on headings, as Markdown will auto-generate them on round-trip)
+		// Check for ID (but ignore IDs on headings, as Markdown will auto-generate them on round-trip).
 		if ( null !== $processor->get_attribute( 'id' ) ) {
 			if ( ! preg_match( '/^h[1-6]$/i', $tag ) ) {
 				return true;
 			}
 		}
 
-		// Check for inline styles
+		// Check for inline styles.
 		if ( null !== $processor->get_attribute( 'style' ) ) {
 			return true;
 		}
@@ -827,11 +798,17 @@ class Push_MD_HTML_Converter {
 		if ( ! empty( $class_attr ) && is_string( $class_attr ) ) {
 			$classes = preg_split( '/\s+/', trim( $class_attr ) );
 
-			// For links (A tags), only preserve if they are CTA buttons.
+			// Allow filtering of preserved classes (e.g. CTA buttons, custom component wrappers).
+			$default_preserved_classes = array( 'button', 'btn', 'cta', 'download_link' );
+			$preserved_classes         = function_exists( 'apply_filters' )
+				? apply_filters( 'push_md_preserved_html_classes', $default_preserved_classes, $tag, $classes )
+				: $default_preserved_classes;
+
+			// For links (A tags), preserve if they carry any explicit preserved class.
 			if ( 'a' === $tag ) {
 				$is_button = false;
 				foreach ( $classes as $class ) {
-					if ( in_array( $class, array( 'button', 'btn', 'cta', 'download_link' ), true ) ) {
+					if ( in_array( $class, $preserved_classes, true ) ) {
 						$is_button = true;
 						break;
 					}
@@ -931,14 +908,14 @@ class Push_MD_HTML_Converter {
 			return wpautop( $text );
 		}
 
-		if ( trim( $text ) === '' ) {
+		if ( '' === trim( $text ) ) {
 			return '';
 		}
 
 		$pre_tags = array();
 		$text     = $text . "\n";
 
-		if ( strpos( $text, '<pre' ) !== false ) {
+		if ( false !== strpos( $text, '<pre' ) ) {
 			$text_parts = explode( '</pre>', $text );
 			$last_part  = array_pop( $text_parts );
 			$text       = '';
@@ -952,7 +929,7 @@ class Push_MD_HTML_Converter {
 				$name              = "<pre wp-pre-tag-$i></pre>";
 				$pre_tags[ $name ] = substr( $text_part, $start ) . '</pre>';
 				$text             .= substr( $text_part, 0, $start ) . $name;
-				$i++;
+				++$i;
 			}
 			$text .= $last_part;
 		}

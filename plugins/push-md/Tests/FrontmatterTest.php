@@ -276,6 +276,7 @@ if ( ! class_exists( 'WP_Post' ) ) {
 		public $post_status       = 'publish';
 		public $post_content      = '';
 		public $post_date_gmt     = '2026-01-01 00:00:00';
+		public $post_modified     = '2026-01-01 00:00:00';
 		public $post_modified_gmt = '2026-01-01 00:00:00';
 	}
 }
@@ -824,17 +825,27 @@ MD;
 	}
 
 	private function create_dummy_post( $args = array() ) {
-		$post                    = new WP_Post( (object) $args );
-		$post->ID                = isset( $args['ID'] ) ? $args['ID'] : 100;
-		$post->post_type         = isset( $args['post_type'] ) ? $args['post_type'] : 'post';
-		$post->post_name         = isset( $args['post_name'] ) ? $args['post_name'] : 'test-post';
-		$post->post_title        = isset( $args['post_title'] ) ? $args['post_title'] : 'Test Post';
-		$post->post_status       = isset( $args['post_status'] ) ? $args['post_status'] : 'publish';
-		$post->post_excerpt      = isset( $args['post_excerpt'] ) ? $args['post_excerpt'] : '';
-		$post->post_content      = isset( $args['post_content'] ) ? $args['post_content'] : 'Content';
-		$post->post_author       = isset( $args['post_author'] ) ? $args['post_author'] : 1;
-		$post->post_date_gmt     = isset( $args['post_date_gmt'] ) ? $args['post_date_gmt'] : '2026-01-01 00:00:00';
-		$post->post_modified_gmt = isset( $args['post_modified_gmt'] ) ? $args['post_modified_gmt'] : '2026-01-01 00:00:00';
+		$post = new WP_Post();
+
+		foreach ( $args as $key => $val ) {
+			$post->$key = $val;
+		}
+
+		if ( ! isset( $args['ID'] ) ) {
+			$post->ID = 100;
+		}
+		if ( ! isset( $args['post_name'] ) ) {
+			$post->post_name = 'test-post';
+		}
+		if ( ! isset( $args['post_title'] ) ) {
+			$post->post_title = 'Test Post';
+		}
+		if ( ! isset( $args['post_status'] ) ) {
+			$post->post_status = 'publish';
+		}
+		if ( ! isset( $args['post_content'] ) ) {
+			$post->post_content = 'Content';
+		}
 
 		return $post;
 	}
@@ -924,9 +935,13 @@ MD;
 	}
 
 	public function test_last_modified_frontmatter_export_and_import() {
-		$post                    = $this->create_dummy_post( array( 'ID' => 505 ) );
-		$post->post_modified_gmt = '2026-08-04 23:50:00';
-		$post->post_modified     = '2026-08-05 05:20:00';
+		$post = $this->create_dummy_post(
+			array(
+				'ID'                => 505,
+				'post_modified_gmt' => '2026-08-04 23:50:00',
+				'post_modified'     => '2026-08-05 05:20:00',
+			)
+		);
 
 		$markdown = Push_MD_Plugin::export_post_to_markdown( $post );
 		$this->assertStringContainsString( 'last_modified: "2026-08-04T23:50:00Z"', $markdown );
