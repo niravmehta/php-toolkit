@@ -6260,10 +6260,7 @@ class Push_MD_Plugin {
 
 		for ( $i = 0; $i < $count; $i++ ) {
 			$line = $lines[ $i ];
-			if ( '' === trim( $line ) || preg_match( '/^\s*#/', $line ) ) {
-				continue;
-			}
-			if ( preg_match( '/^\s+/', $line ) ) {
+			if ( '' === trim( $line ) || preg_match( '/^\s*#/', $line ) || preg_match( '/^\s+/', $line ) ) {
 				continue;
 			}
 			if ( ! preg_match( '/^([A-Za-z0-9_.-]+)\s*:(?:\s*(.*))?$/', $line, $key_matches ) ) {
@@ -6282,42 +6279,8 @@ class Push_MD_Plugin {
 			}
 
 			if ( ! empty( $nested_lines ) ) {
-				$i = $j - 1;
-
-				// Check if this is a YAML list.
-				$list_items = array();
-				$is_list    = false;
-
-				foreach ( $nested_lines as $nested_line ) {
-					$trimmed_nested = trim( $nested_line );
-					if ( '' === $trimmed_nested ) {
-						continue;
-					}
-					if ( preg_match( '/^-\s+(.*)$/', $trimmed_nested, $item_match ) ) {
-						$is_list      = true;
-						$item_val     = trim( $item_match[1] );
-						$list_items[] = self::unquote_frontmatter_value( $item_val );
-					}
-				}
-
-				if ( $is_list ) {
-					$metadata[ $key ] = $list_items;
-					continue;
-				}
-
-				// Multiline / indented scalar string.
-				$scalar_lines = array();
-				foreach ( $nested_lines as $nested_line ) {
-					$trimmed_nested = trim( $nested_line );
-					if ( '' !== $trimmed_nested ) {
-						$scalar_lines[] = $trimmed_nested;
-					}
-				}
-				if ( '|' === $raw ) {
-					$metadata[ $key ] = implode( "\n", $scalar_lines );
-				} else {
-					$metadata[ $key ] = implode( ' ', $scalar_lines );
-				}
+				$i                = $j - 1;
+				$metadata[ $key ] = self::parse_yaml_nested_block( $raw, $nested_lines );
 				continue;
 			}
 
@@ -6327,13 +6290,7 @@ class Push_MD_Plugin {
 			}
 
 			if ( 0 === strpos( $raw, '[' ) && ']' === substr( $raw, -1 ) ) {
-				$decoded = json_decode( $raw, true );
-				if ( is_array( $decoded ) ) {
-					$metadata[ $key ] = array_values( array_filter( array_map( 'trim', array_map( 'strval', $decoded ) ), 'strlen' ) );
-					continue;
-				}
-				$inner            = trim( substr( $raw, 1, -1 ) );
-				$metadata[ $key ] = array_values( array_filter( array_map( 'trim', explode( ',', $inner ) ), 'strlen' ) );
+				$metadata[ $key ] = self::parse_yaml_array_value( $raw );
 				continue;
 			}
 
@@ -6341,6 +6298,58 @@ class Push_MD_Plugin {
 		}
 
 		return $metadata;
+	}
+
+	/**
+	 * Helper to parse indented multiline or list item frontmatter blocks.
+	 *
+	 * @param string $raw          Raw key value string.
+	 * @param array  $nested_lines Indented lines under key.
+	 * @return array|string Parsed list array or multiline scalar string.
+	 */
+	private static function parse_yaml_nested_block( $raw, $nested_lines ) {
+		$list_items = array();
+		$is_list    = false;
+
+		foreach ( $nested_lines as $nested_line ) {
+			$trimmed_nested = trim( $nested_line );
+			if ( '' === $trimmed_nested ) {
+				continue;
+			}
+			if ( preg_match( '/^-\s+(.*)$/', $trimmed_nested, $item_match ) ) {
+				$is_list      = true;
+				$list_items[] = self::unquote_frontmatter_value( trim( $item_match[1] ) );
+			}
+		}
+
+		if ( $is_list ) {
+			return $list_items;
+		}
+
+		$scalar_lines = array();
+		foreach ( $nested_lines as $nested_line ) {
+			$trimmed_nested = trim( $nested_line );
+			if ( '' !== $trimmed_nested ) {
+				$scalar_lines[] = $trimmed_nested;
+			}
+		}
+
+		return '|' === $raw ? implode( "\n", $scalar_lines ) : implode( ' ', $scalar_lines );
+	}
+
+	/**
+	 * Helper to parse inline array strings like ["a", "b"] or [a, b].
+	 *
+	 * @param string $raw Raw inline array string.
+	 * @return array Sanitized array of non-empty strings.
+	 */
+	private static function parse_yaml_array_value( $raw ) {
+		$decoded = json_decode( $raw, true );
+		if ( is_array( $decoded ) ) {
+			return array_values( array_filter( array_map( 'trim', array_map( 'strval', $decoded ) ), 'strlen' ) );
+		}
+		$inner = trim( substr( $raw, 1, -1 ) );
+		return array_values( array_filter( array_map( 'trim', explode( ',', $inner ) ), 'strlen' ) );
 	}
 
 	private static function unquote_frontmatter_value( $val ) {
