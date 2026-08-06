@@ -128,6 +128,22 @@ class MediaSupportTest extends TestCase {
 		$this->assertStringContainsString( 'photo.jpg', $rewritten );
 	}
 
+	public function testRewriteInlineImagePathsWithPrefixedHttp() {
+		$post_content = '<p>Quote: <img alt="Quote" src="http://../media/quote-1.webp"></p>';
+
+		$commit_files = array(
+			'media/quote-1.webp' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+		);
+
+		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 1, $post_content, array(), $commit_files );
+
+		$this->assertStringNotContainsString( 'http://../media/quote-1.webp', $rewritten );
+		$this->assertStringContainsString( 'quote-1.webp', $rewritten );
+	}
+
 	public function testFeaturedImageRelativePathProcessing() {
 		$commit_files = array(
 			'media/cover.png' => array(

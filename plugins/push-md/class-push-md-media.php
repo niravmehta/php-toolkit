@@ -123,13 +123,16 @@ class Push_MD_Media {
 				continue;
 			}
 
-			$clean_path = self::normalize_relative_media_path( $path );
-			$upload     = self::upload_media_asset( $clean_path, $entry['content'] );
-
-			$uploaded_map[ $clean_path ] = array(
+			$clean_path                              = self::normalize_relative_media_path( $path );
+			$upload                                  = self::upload_media_asset( $clean_path, $entry['content'] );
+			$info                                    = array(
 				'url' => $upload['url'],
 				'id'  => $upload['attachment_id'],
 			);
+			$uploaded_map[ $path ]                   = $info;
+			$uploaded_map[ $clean_path ]             = $info;
+			$uploaded_map[ '../' . $clean_path ]     = $info;
+			$uploaded_map[ basename( $clean_path ) ] = $info;
 		}
 
 		return $uploaded_map;
@@ -218,40 +221,41 @@ class Push_MD_Media {
 		$title_name = function_exists( 'sanitize_file_name' ) ? sanitize_file_name( pathinfo( $filename, PATHINFO_FILENAME ) ) : pathinfo( $filename, PATHINFO_FILENAME );
 
 		$attachment = array(
+			'guid'           => $url,
 			'post_mime_type' => $mime_type,
 			'post_title'     => $title_name,
 			'post_content'   => '',
 			'post_status'    => 'inherit',
 		);
 
-		$attachment_id = 0;
+		if ( $parent_post_id > 0 ) {
+			$attachment['post_parent'] = $parent_post_id;
+		}
+
 		if ( function_exists( 'wp_insert_attachment' ) ) {
 			$attachment_id = wp_insert_attachment( $attachment, $file_path, $parent_post_id );
 			if ( ! is_wp_error( $attachment_id ) && $attachment_id > 0 ) {
-				if ( function_exists( 'wp_generate_attachment_metadata' ) && file_exists( $file_path ) ) {
+				if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
 					require_once ABSPATH . 'wp-admin/includes/image.php';
 					$attach_data = wp_generate_attachment_metadata( $attachment_id, $file_path );
-					if ( function_exists( 'wp_update_attachment_metadata' ) && ! empty( $attach_data ) ) {
-						wp_update_attachment_metadata( $attachment_id, $attach_data );
-					}
+					wp_update_attachment_metadata( $attachment_id, $attach_data );
 				}
-				$attachment_url = wp_get_attachment_url( $attachment_id );
-				if ( $attachment_url ) {
-					$url = $attachment_url;
-				}
+
+				return array(
+					'attachment_id' => (int) $attachment_id,
+					'url'           => $url,
+				);
 			}
 		}
 
 		return array(
-			'attachment_id' => is_numeric( $attachment_id ) ? (int) $attachment_id : 0,
+			'attachment_id' => 0,
 			'url'           => $url,
-			'file_path'     => $file_path,
 		);
 	}
 
 	/**
-	 * Resolve a relative URL pointing to a media/ file, upload it if present in $commit_files,
-	 * and return an array with 'url' and 'id', or null if not a relative media URL.
+	 * Resolve media URL to attachment info array ('url' => string, 'id' => int).
 	 *
 	 * @param string $relative_url       Relative URL string.
 	 * @param int    $post_id            Post ID.
@@ -263,11 +267,22 @@ class Push_MD_Media {
 	 */
 	public static function resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map = array(), $commit_files = array(), &$uploaded_cache = array(), $dry_run = false ) {
 		$relative_url = trim( (string) $relative_url );
-		if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
+		if ( '' === $relative_url || 0 === strpos( $relative_url, 'data:' ) ) {
 			return null;
 		}
 
-		$clean_path = self::normalize_relative_media_path( $relative_url );
+		// Strip malformed scheme prefixes like http://../media/ or http://localhost/../media/.
+		$clean_url = preg_replace( '#^https?://([^/]+/)??(\.\./|\./|/)*#i', '', $relative_url );
+
+		if ( ( 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) ) && ! preg_match( '#^https?://([^/]+/)??(\.\./|\./|/)*(media/|[^/]+\.(png|jpg|jpeg|gif|webp)$)#i', $relative_url ) ) {
+			return null;
+		}
+
+		$clean_path = self::normalize_relative_media_path( $clean_url );
+		if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
+			$clean_path = self::normalize_relative_media_path( $relative_url );
+		}
+
 		if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
 			return null;
 		}
@@ -276,7 +291,19 @@ class Push_MD_Media {
 			if ( isset( $uploaded_media_map[ $clean_path ]['url'] ) ) {
 				return $uploaded_media_map[ $clean_path ];
 			}
-			if ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map[ 'media/' . basename( $clean_path ) ]['content'] ) ) ) {
+			if ( isset( $uploaded_media_map[ $relative_url ]['url'] ) ) {
+				return $uploaded_media_map[ $relative_url ];
+			}
+			$fn = basename( $clean_path );
+			if ( isset( $uploaded_media_map[ 'media/' . $fn ]['url'] ) ) {
+				return $uploaded_media_map[ 'media/' . $fn ];
+			}
+			foreach ( $uploaded_media_map as $map_key => $map_info ) {
+				if ( is_array( $map_info ) && isset( $map_info['url'] ) && basename( $map_key ) === $fn ) {
+					return $map_info;
+				}
+			}
+			if ( empty( $commit_files ) ) {
 				$commit_files = $uploaded_media_map;
 			}
 		}
@@ -285,16 +312,39 @@ class Push_MD_Media {
 			return $uploaded_cache[ $clean_path ];
 		}
 
+		$fn           = basename( $clean_path );
+		$file_payload = null;
+		$target_path  = $clean_path;
+
 		if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+			$file_payload = $commit_files[ $clean_path ]['content'];
+			$target_path  = $clean_path;
+		} elseif ( isset( $commit_files[ 'media/' . $fn ]['content'] ) ) {
+			$file_payload = $commit_files[ 'media/' . $fn ]['content'];
+			$target_path  = 'media/' . $fn;
+		} elseif ( isset( $commit_files[ $fn ]['content'] ) ) {
+			$file_payload = $commit_files[ $fn ]['content'];
+			$target_path  = 'media/' . $fn;
+		} else {
+			foreach ( $commit_files as $c_path => $c_entry ) {
+				if ( is_array( $c_entry ) && isset( $c_entry['content'] ) && basename( $c_path ) === $fn ) {
+					$file_payload = $c_entry['content'];
+					$target_path  = $c_path;
+					break;
+				}
+			}
+		}
+
+		if ( null !== $file_payload ) {
 			if ( $dry_run ) {
 				$info                          = array(
-					'url' => 'http://example.org/wp-content/uploads/' . basename( $clean_path ),
+					'url' => 'http://example.org/wp-content/uploads/' . $fn,
 					'id'  => 0,
 				);
 				$uploaded_cache[ $clean_path ] = $info;
 				return $info;
 			}
-			$upload                        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
+			$upload                        = self::upload_media_asset( $target_path, $file_payload, $post_id );
 			$info                          = array(
 				'url' => $upload['url'],
 				'id'  => $upload['attachment_id'],
@@ -303,8 +353,8 @@ class Push_MD_Media {
 			return $info;
 		}
 
-		$existing_id  = self::find_existing_attachment_id_by_filename( basename( $clean_path ) );
-		$existing_url = self::find_existing_attachment_url_by_filename( basename( $clean_path ) );
+		$existing_id  = self::find_existing_attachment_id_by_filename( $fn );
+		$existing_url = self::find_existing_attachment_url_by_filename( $fn );
 		if ( $existing_url ) {
 			$info                          = array(
 				'url' => $existing_url,
