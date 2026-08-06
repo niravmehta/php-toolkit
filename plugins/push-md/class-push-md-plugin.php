@@ -5988,8 +5988,14 @@ class Push_MD_Plugin {
 			}
 
 			$fn = basename( $clean_path );
-			if ( isset( $commit_files[ $clean_path ] ) || isset( $commit_files[ 'media/' . $fn ] ) ) {
+			if ( isset( $commit_files[ $clean_path ] ) || isset( $commit_files[ 'media/' . $fn ] ) || isset( $commit_files[ $fn ] ) ) {
 				return -1;
+			}
+
+			foreach ( array_keys( $commit_files ) as $c_path ) {
+				if ( basename( $c_path ) === $fn ) {
+					return -1;
+				}
 			}
 
 			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( $fn );
