@@ -244,8 +244,12 @@ class MediaSupportTest extends TestCase {
 		$rewritten_markup = Push_MD_Media::rewrite_inline_image_paths( 50, $markdown_content, $commit_files );
 		$this->assertStringNotContainsString( '../media/diagram.png', $rewritten_markup );
 
-		// 3. Featured image assignment simulation
-		Push_MD_Media::handle_featured_image( 50, '../media/hero.png', $commit_files );
+		// 3. Featured image assignment simulation for all path formats
+		Push_MD_Media::handle_featured_image( 50, '../media/hero.png', array(), $commit_files );
+		Push_MD_Media::handle_featured_image( 50, 'media/hero.png', array(), $commit_files );
+		Push_MD_Media::handle_featured_image( 50, './media/hero.png', array(), $commit_files );
+		Push_MD_Media::handle_featured_image( 50, '/media/hero.png', array(), $commit_files );
+		Push_MD_Media::handle_featured_image( 50, 'hero.png', array(), $commit_files );
 		$this->assertTrue( true );
 	}
 }
