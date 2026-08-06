@@ -38,8 +38,8 @@ class Push_MD_Media {
 	 * @return bool True if under media/ directory.
 	 */
 	public static function is_media_path( $path ) {
-		$path = ltrim( (string) $path, '/' );
-		return 0 === strpos( $path, 'media/' ) || 'media' === $path;
+		$clean = self::normalize_relative_media_path( $path );
+		return '' !== $clean;
 	}
 
 	/**
@@ -546,23 +546,29 @@ class Push_MD_Media {
 	}
 
 	/**
-	 * Normalize relative media path (e.g. "../media/cover.png" -> "media/cover.png").
+	 * Normalize relative media path to always start with media/.
+	 * Handles "../media/image.png", "media/image.png", "/media/image.png", "./media/image.png", or "image.png".
 	 *
 	 * @param string $path Relative path string.
-	 * @return string Normalized path starting with media/.
+	 * @return string Normalized path starting with media/, or empty string if not a media path.
 	 */
 	public static function normalize_relative_media_path( $path ) {
 		$path = trim( (string) $path );
-		$path = preg_replace( '#^\.\.?/#', '', $path );
-		$path = ltrim( $path, '/' );
+		if ( '' === $path || 0 === strpos( $path, 'http://' ) || 0 === strpos( $path, 'https://' ) || 0 === strpos( $path, '//' ) || 0 === strpos( $path, 'data:' ) ) {
+			return '';
+		}
 
-		// Handle multi-level ../ (e.g., "../../media/cover.png").
-		while ( 0 === strpos( $path, '../' ) || 0 === strpos( $path, './' ) ) {
-			$path = preg_replace( '#^\.\.?/#', '', $path );
+		while ( preg_match( '#^(\.\.?/|/)#', $path ) ) {
+			$path = preg_replace( '#^(\.\.?/|/)+#', '', $path );
 		}
 
 		if ( 0 === strpos( $path, 'media/' ) || 'media' === $path ) {
 			return $path;
+		}
+
+		$extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
+		if ( ! empty( $extension ) && in_array( $extension, self::$allowed_extensions, true ) ) {
+			return 'media/' . ltrim( $path, '/' );
 		}
 
 		return '';
