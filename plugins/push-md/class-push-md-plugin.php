@@ -5207,6 +5207,11 @@ class Push_MD_Plugin {
 		}
 
 		$rules[] = '';
+		$rules[] = '# Media assets';
+		$rules[] = '!media/';
+		$rules[] = '!media/**';
+
+		$rules[] = '';
 		$rules[] = '# Read-only theme context';
 		$rules[] = '!wp_theme/';
 		$rules[] = '!wp_theme/**/*.json';
