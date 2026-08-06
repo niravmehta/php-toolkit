@@ -2850,13 +2850,15 @@ class Push_MD_Plugin {
 			self::assert_can_create_post_type( $post_type );
 		}
 
+		$dry_run            = ! empty( $options['dry_run'] );
 		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
 		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
-		$post_markup         = Push_MD_Media::rewrite_inline_image_paths(
+		$post_markup        = Push_MD_Media::rewrite_inline_image_paths(
 			$existing_post ? $existing_post->ID : 0,
 			$result->get_block_markup(),
 			$uploaded_media_map,
-			$commit_files
+			$commit_files,
+			$dry_run
 		);
 
 		$postarr = array(
@@ -6020,7 +6022,8 @@ class Push_MD_Plugin {
 	private static function assign_post_featured_image( $post_id, $img_val, $options = array() ) {
 		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
 		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
-		Push_MD_Media::handle_featured_image( $post_id, $img_val, $uploaded_media_map, $commit_files );
+		$dry_run            = ! empty( $options['dry_run'] );
+		Push_MD_Media::handle_featured_image( $post_id, $img_val, $uploaded_media_map, $commit_files, $dry_run );
 	}
 
 	private static function is_yoast_seo_active() {
