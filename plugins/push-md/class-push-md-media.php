@@ -255,10 +255,11 @@ class Push_MD_Media {
 	 * Resolve a relative URL pointing to a media/ file, upload it if present in $commit_files,
 	 * and return an array with 'url' and 'id', or null if not a relative media URL.
 	 *
-	 * @param string $relative_url  Relative URL string.
-	 * @param int    $post_id       Post ID.
-	 * @param array  $commit_files  Commit files payload.
-	 * @param array  $uploaded_cache Upload cache array reference.
+	 * @param string $relative_url       Relative URL string.
+	 * @param int    $post_id            Post ID.
+	 * @param array  $uploaded_media_map Pre-uploaded media map.
+	 * @param array  $commit_files       Commit files payload.
+	 * @param array  $uploaded_cache     Upload cache array reference.
 	 * @return array|null Array with 'url' and 'id', or null.
 	 */
 	public static function resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map = array(), $commit_files = array(), &$uploaded_cache = array() ) {
@@ -276,7 +277,7 @@ class Push_MD_Media {
 			if ( isset( $uploaded_media_map[ $clean_path ]['url'] ) ) {
 				return $uploaded_media_map[ $clean_path ];
 			}
-			if ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map['media/' . basename( $clean_path )]['content'] ) ) ) {
+			if ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map[ 'media/' . basename( $clean_path ) ]['content'] ) ) ) {
 				$commit_files = $uploaded_media_map;
 			}
 		}
@@ -310,12 +311,66 @@ class Push_MD_Media {
 	}
 
 	/**
+	 * Update attachment record metadata (alt text, title, caption) if present and not already set.
+	 *
+	 * @param int    $attachment_id Attachment ID.
+	 * @param string $alt_text      Alt text from Markdown/HTML.
+	 * @param string $title         Title from Markdown/HTML.
+	 * @param string $caption       Caption text from HTML/block metadata.
+	 */
+	public static function update_attachment_metadata_from_context( $attachment_id, $alt_text = '', $title = '', $caption = '' ) {
+		if ( ! is_numeric( $attachment_id ) || (int) $attachment_id <= 0 ) {
+			return;
+		}
+		$attachment_id = (int) $attachment_id;
+
+		$alt_text = trim( (string) $alt_text );
+		if ( '' !== $alt_text && function_exists( 'update_post_meta' ) ) {
+			$existing_alt = function_exists( 'get_post_meta' ) ? get_post_meta( $attachment_id, '_wp_attachment_image_alt', true ) : '';
+			if ( empty( $existing_alt ) ) {
+				$clean_alt = function_exists( 'sanitize_text_field' ) ? sanitize_text_field( $alt_text ) : strip_tags( $alt_text );
+				update_post_meta( $attachment_id, '_wp_attachment_image_alt', $clean_alt );
+			}
+		}
+
+		$post_updates = array();
+
+		$title = trim( (string) $title );
+		if ( '' !== $title && function_exists( 'get_post' ) ) {
+			$post = get_post( $attachment_id );
+			if ( $post && 'attachment' === $post->post_type ) {
+				$clean_title = function_exists( 'sanitize_text_field' ) ? sanitize_text_field( $title ) : strip_tags( $title );
+				$file_path   = function_exists( 'get_attached_file' ) ? get_attached_file( $attachment_id ) : '';
+				$fn_title    = $file_path ? pathinfo( $file_path, PATHINFO_FILENAME ) : '';
+				if ( empty( $post->post_title ) || ( '' !== $fn_title && $post->post_title === $fn_title ) ) {
+					$post_updates['post_title'] = $clean_title;
+				}
+			}
+		}
+
+		$caption = trim( (string) $caption );
+		if ( '' !== $caption && function_exists( 'get_post' ) ) {
+			$post = get_post( $attachment_id );
+			if ( $post && 'attachment' === $post->post_type && empty( $post->post_excerpt ) ) {
+				$clean_caption                = function_exists( 'sanitize_text_field' ) ? sanitize_text_field( $caption ) : strip_tags( $caption );
+				$post_updates['post_excerpt'] = $clean_caption;
+			}
+		}
+
+		if ( ! empty( $post_updates ) && function_exists( 'wp_update_post' ) ) {
+			$post_updates['ID'] = $attachment_id;
+			wp_update_post( $post_updates );
+		}
+	}
+
+	/**
 	 * Process media files in a pushed commit payload and rewrite relative image URLs in Markdown, HTML,
 	 * picture/figure tags, srcset attributes, and Gutenberg block comment JSON metadata.
 	 *
-	 * @param int    $post_id      Post ID.
-	 * @param string $post_content Block/HTML markup or Markdown content.
-	 * @param array  $commit_files Array of file entries from pushed commit ($path => array('mode' => ..., 'content' => ...)).
+	 * @param int    $post_id            Post ID.
+	 * @param string $post_content       Block/HTML markup or Markdown content.
+	 * @param array  $uploaded_media_map Pre-uploaded media map.
+	 * @param array  $commit_files       Array of file entries from pushed commit ($path => array('mode' => ..., 'content' => ...)).
 	 * @return string Updated post content with rewritten absolute attachment URLs.
 	 */
 	public static function rewrite_inline_image_paths( $post_id, $post_content, $uploaded_media_map = array(), $commit_files = array() ) {
@@ -325,14 +380,19 @@ class Push_MD_Media {
 
 		$uploaded_cache = array();
 
-		// 1. Markdown image syntax: ![alt](url)
+		// 1. Markdown image syntax: ![alt](url "title")
 		$post_content = preg_replace_callback(
-			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+"[^"]*")?\)/i',
+			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+["\'](?P<title>[^"\']+)["\'])?\)/i',
 			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
 				$full_match   = $matches[0];
 				$relative_url = $matches['url'];
+				$alt_text     = isset( $matches['alt'] ) ? $matches['alt'] : '';
+				$title_text   = isset( $matches['title'] ) ? $matches['title'] : '';
 				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
 				if ( $info && ! empty( $info['url'] ) ) {
+					if ( ! empty( $info['id'] ) ) {
+						Push_MD_Media::update_attachment_metadata_from_context( $info['id'], $alt_text, $title_text );
+					}
 					return str_replace( $relative_url, $info['url'], $full_match );
 				}
 				return $full_match;
@@ -340,7 +400,24 @@ class Push_MD_Media {
 			$post_content
 		);
 
-		// 2. HTML attributes (src, href, poster, data-src, etc.) on any tag (<img/>, <source/>, <figure>, <a>, etc.)
+		// 2. HTML figure tags with caption: <figure...><img.../><figcaption>Caption</figcaption></figure>
+		$post_content = preg_replace_callback(
+			'/<figure\b[^>]*>(?P<inner>.*?<img\b[^>]*?\bsrc=["\'](?P<url>[^"\']+)["\'][^>]*>.*?)(?:<figcaption\b[^>]*>(?P<caption>.*?<\/figcaption>))?.*?<\/figure>/is',
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+				$full_match   = $matches[0];
+				$relative_url = $matches['url'];
+				$caption_raw  = isset( $matches['caption'] ) ? $matches['caption'] : '';
+				$caption_text = trim( strip_tags( preg_replace( '#</?figcaption\b[^>]*>#i', '', $caption_raw ) ) );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+				if ( $info && ! empty( $info['url'] ) && ! empty( $info['id'] ) && '' !== $caption_text ) {
+					Push_MD_Media::update_attachment_metadata_from_context( $info['id'], '', '', $caption_text );
+				}
+				return $full_match;
+			},
+			$post_content
+		);
+
+		// 3. HTML attributes (src, href, poster, data-src, etc.) on any tag (<img/>, <source/>, <figure>, <a>, etc.)
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>src|href|poster|data-[a-z0-9_-]+)=["\'](?P<url>[^"\']+)["\']/i',
 			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
@@ -356,7 +433,7 @@ class Push_MD_Media {
 			$post_content
 		);
 
-		// 3. HTML srcset attributes (e.g. srcset="../media/c1.png 1x, ../media/c2.png 2x")
+		// 4. HTML srcset attributes (e.g. srcset="../media/c1.png 1x, ../media/c2.png 2x")
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>srcset)=["\'](?P<val>[^"\']+)["\']/i',
 			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
@@ -390,7 +467,7 @@ class Push_MD_Media {
 			$post_content
 		);
 
-		// 4. Gutenberg Block Comment JSON metadata: <!-- wp:image {"id":0,"url":"../media/chart.png"} -->
+		// 5. Gutenberg Block Comment JSON metadata: <!-- wp:image {"id":0,"url":"../media/chart.png"} -->
 		$post_content = preg_replace_callback(
 			'/<!--\s+wp:(?P<name>[a-z0-9\/-]+)\s+(?P<json>\{.*?\})\s+-->/i',
 			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
@@ -428,6 +505,10 @@ class Push_MD_Media {
 
 				$walker( $decoded );
 
+				$alt_text     = isset( $decoded['alt'] ) ? $decoded['alt'] : '';
+				$title_text   = isset( $decoded['title'] ) ? $decoded['title'] : '';
+				$caption_text = isset( $decoded['caption'] ) ? $decoded['caption'] : '';
+
 				if ( $found_id > 0 ) {
 					if ( array_key_exists( 'id', $decoded ) ) {
 						$decoded['id'] = $found_id;
@@ -436,6 +517,9 @@ class Push_MD_Media {
 					if ( array_key_exists( 'mediaId', $decoded ) ) {
 						$decoded['mediaId'] = $found_id;
 						$changed            = true;
+					}
+					if ( '' !== $alt_text || '' !== $title_text || '' !== $caption_text ) {
+						Push_MD_Media::update_attachment_metadata_from_context( $found_id, $alt_text, $title_text, $caption_text );
 					}
 				}
 
@@ -478,9 +562,10 @@ class Push_MD_Media {
 	/**
 	 * Assign featured image for a post based on frontmatter value.
 	 *
-	 * @param int   $post_id      Post ID.
-	 * @param mixed $img_val      Featured image value from frontmatter.
-	 * @param array $commit_files Pushed commit payload files ($path => entry).
+	 * @param int   $post_id            Post ID.
+	 * @param mixed $img_val            Featured image value from frontmatter.
+	 * @param array $uploaded_media_map Pre-uploaded media map.
+	 * @param array $commit_files       Pushed commit payload files ($path => entry).
 	 */
 	public static function handle_featured_image( $post_id, $img_val, $uploaded_media_map = array(), $commit_files = array() ) {
 		$img_val = trim( (string) $img_val );
@@ -527,7 +612,7 @@ class Push_MD_Media {
 			if ( is_array( $uploaded_media_map ) ) {
 				if ( isset( $uploaded_media_map[ $clean_path ]['id'] ) && $uploaded_media_map[ $clean_path ]['id'] > 0 ) {
 					$attachment_id = (int) $uploaded_media_map[ $clean_path ]['id'];
-				} elseif ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map['media/' . basename( $clean_path )]['content'] ) ) ) {
+				} elseif ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map[ 'media/' . basename( $clean_path ) ]['content'] ) ) ) {
 					$commit_files = $uploaded_media_map;
 				}
 			}
