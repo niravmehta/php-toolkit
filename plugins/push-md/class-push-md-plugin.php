@@ -2820,7 +2820,7 @@ class Push_MD_Plugin {
 				$post_type
 			)
 		);
-		self::validate_post_frontmatter_references( $metadata, $post_type );
+		self::validate_post_frontmatter_references( $metadata, $post_type, $options );
 
 		$post_id       = self::find_post_id_by_path_metadata( $path, $metadata );
 		$existing_post = $post_id ? get_post( $post_id ) : null;
@@ -5844,7 +5844,7 @@ class Push_MD_Plugin {
 		}
 
 		if ( isset( $metadata['featured_image'] ) && '' !== trim( (string) $metadata['featured_image'] ) ) {
-			$img_id = self::resolve_featured_image_id( $metadata['featured_image'] );
+			$img_id = self::resolve_featured_image_id( $metadata['featured_image'], $options );
 			if ( 0 === $img_id ) {
 				throw new Exception( sprintf( 'Push rejected because featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ) );
 			}
@@ -5960,20 +5960,45 @@ class Push_MD_Plugin {
 		return ( $user && ! is_wp_error( $user ) ) ? $user->ID : 0;
 	}
 
-	private static function resolve_featured_image_id( $img_val ) {
+	private static function resolve_featured_image_id( $img_val, $options = array() ) {
 		$img_val = trim( (string) $img_val );
 		if ( '' === $img_val ) {
 			return 0;
 		}
 
 		if ( is_numeric( $img_val ) ) {
-			$post = get_post( (int) $img_val );
+			$post = function_exists( 'get_post' ) ? get_post( (int) $img_val ) : null;
 			return ( $post && 'attachment' === $post->post_type ) ? (int) $img_val : 0;
 		}
 
-		$attachment_id = attachment_url_to_postid( $img_val );
-		if ( $attachment_id ) {
-			return $attachment_id;
+		if ( function_exists( 'attachment_url_to_postid' ) ) {
+			$attachment_id = attachment_url_to_postid( $img_val );
+			if ( $attachment_id ) {
+				return $attachment_id;
+			}
+		}
+
+		$clean_path = Push_MD_Media::normalize_relative_media_path( $img_val );
+		if ( '' !== $clean_path && Push_MD_Media::is_media_path( $clean_path ) ) {
+			$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+			$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+
+			if ( is_array( $uploaded_media_map ) && isset( $uploaded_media_map[ $clean_path ]['id'] ) && $uploaded_media_map[ $clean_path ]['id'] > 0 ) {
+				return (int) $uploaded_media_map[ $clean_path ]['id'];
+			}
+
+			if ( isset( $commit_files[ $clean_path ]['content'] ) || isset( $commit_files[ 'media/' . basename( $clean_path ) ]['content'] ) ) {
+				return -1;
+			}
+
+			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( basename( $clean_path ) );
+			if ( $existing_id > 0 ) {
+				return $existing_id;
+			}
+		}
+
+		if ( 0 === strpos( $img_val, 'http://' ) || 0 === strpos( $img_val, 'https://' ) || 0 === strpos( $img_val, '//' ) ) {
+			return -1;
 		}
 
 		return 0;
