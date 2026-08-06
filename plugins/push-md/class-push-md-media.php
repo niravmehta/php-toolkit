@@ -260,9 +260,10 @@ class Push_MD_Media {
 	 * @param array  $uploaded_media_map Pre-uploaded media map.
 	 * @param array  $commit_files       Commit files payload.
 	 * @param array  $uploaded_cache     Upload cache array reference.
+	 * @param bool   $dry_run            If true, validate only without writing uploads.
 	 * @return array|null Array with 'url' and 'id', or null.
 	 */
-	public static function resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map = array(), $commit_files = array(), &$uploaded_cache = array() ) {
+	public static function resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map = array(), $commit_files = array(), &$uploaded_cache = array(), $dry_run = false ) {
 		$relative_url = trim( (string) $relative_url );
 		if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
 			return null;
@@ -287,6 +288,14 @@ class Push_MD_Media {
 		}
 
 		if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+			if ( $dry_run ) {
+				$info                          = array(
+					'url' => 'http://example.org/wp-content/uploads/' . basename( $clean_path ),
+					'id'  => 0,
+				);
+				$uploaded_cache[ $clean_path ] = $info;
+				return $info;
+			}
 			$upload                        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
 			$info                          = array(
 				'url' => $upload['url'],
@@ -318,8 +327,8 @@ class Push_MD_Media {
 	 * @param string $title         Title from Markdown/HTML.
 	 * @param string $caption       Caption text from HTML/block metadata.
 	 */
-	public static function update_attachment_metadata_from_context( $attachment_id, $alt_text = '', $title = '', $caption = '' ) {
-		if ( ! is_numeric( $attachment_id ) || (int) $attachment_id <= 0 ) {
+	public static function update_attachment_metadata_from_context( $attachment_id, $alt_text = '', $title = '', $caption = '', $dry_run = false ) {
+		if ( $dry_run || ! is_numeric( $attachment_id ) || (int) $attachment_id <= 0 ) {
 			return;
 		}
 		$attachment_id = (int) $attachment_id;
@@ -373,7 +382,7 @@ class Push_MD_Media {
 	 * @param array  $commit_files       Array of file entries from pushed commit ($path => array('mode' => ..., 'content' => ...)).
 	 * @return string Updated post content with rewritten absolute attachment URLs.
 	 */
-	public static function rewrite_inline_image_paths( $post_id, $post_content, $uploaded_media_map = array(), $commit_files = array() ) {
+	public static function rewrite_inline_image_paths( $post_id, $post_content, $uploaded_media_map = array(), $commit_files = array(), $dry_run = false ) {
 		if ( empty( $post_content ) || ! is_string( $post_content ) ) {
 			return $post_content;
 		}
@@ -383,15 +392,15 @@ class Push_MD_Media {
 		// 1. Markdown image syntax: ![alt](url "title")
 		$post_content = preg_replace_callback(
 			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+["\'](?P<title>[^"\']+)["\'])?\)/i',
-			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, $dry_run ) {
 				$full_match   = $matches[0];
 				$relative_url = $matches['url'];
 				$alt_text     = isset( $matches['alt'] ) ? $matches['alt'] : '';
 				$title_text   = isset( $matches['title'] ) ? $matches['title'] : '';
-				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache, $dry_run );
 				if ( $info && ! empty( $info['url'] ) ) {
 					if ( ! empty( $info['id'] ) ) {
-						Push_MD_Media::update_attachment_metadata_from_context( $info['id'], $alt_text, $title_text );
+						Push_MD_Media::update_attachment_metadata_from_context( $info['id'], $alt_text, $title_text, '', $dry_run );
 					}
 					return str_replace( $relative_url, $info['url'], $full_match );
 				}
@@ -403,14 +412,14 @@ class Push_MD_Media {
 		// 2. HTML figure tags with caption: <figure...><img.../><figcaption>Caption</figcaption></figure>
 		$post_content = preg_replace_callback(
 			'/<figure\b[^>]*>(?P<inner>.*?<img\b[^>]*?\bsrc=["\'](?P<url>[^"\']+)["\'][^>]*>.*?)(?:<figcaption\b[^>]*>(?P<caption>.*?<\/figcaption>))?.*?<\/figure>/is',
-			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, $dry_run ) {
 				$full_match   = $matches[0];
 				$relative_url = $matches['url'];
 				$caption_raw  = isset( $matches['caption'] ) ? $matches['caption'] : '';
 				$caption_text = trim( strip_tags( preg_replace( '#</?figcaption\b[^>]*>#i', '', $caption_raw ) ) );
-				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache, $dry_run );
 				if ( $info && ! empty( $info['url'] ) && ! empty( $info['id'] ) && '' !== $caption_text ) {
-					Push_MD_Media::update_attachment_metadata_from_context( $info['id'], '', '', $caption_text );
+					Push_MD_Media::update_attachment_metadata_from_context( $info['id'], '', '', $caption_text, $dry_run );
 				}
 				return $full_match;
 			},
@@ -420,11 +429,11 @@ class Push_MD_Media {
 		// 3. HTML attributes (src, href, poster, data-src, etc.) on any tag (<img/>, <source/>, <figure>, <a>, etc.)
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>src|href|poster|data-[a-z0-9_-]+)=["\'](?P<url>[^"\']+)["\']/i',
-			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, $dry_run ) {
 				$full_match   = $matches[0];
 				$attr_name    = $matches['attr'];
 				$relative_url = $matches['url'];
-				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache, $dry_run );
 				if ( $info && ! empty( $info['url'] ) ) {
 					return $attr_name . '="' . $info['url'] . '"';
 				}
@@ -436,7 +445,7 @@ class Push_MD_Media {
 		// 4. HTML srcset attributes (e.g. srcset="../media/c1.png 1x, ../media/c2.png 2x")
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>srcset)=["\'](?P<val>[^"\']+)["\']/i',
-			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, $dry_run ) {
 				$full_match = $matches[0];
 				$srcset_val = $matches['val'];
 				$entries    = explode( ',', $srcset_val );
@@ -447,7 +456,7 @@ class Push_MD_Media {
 					$trimmed = trim( $entry );
 					$parts   = preg_split( '/\s+/', $trimmed, 2 );
 					if ( ! empty( $parts[0] ) ) {
-						$info = Push_MD_Media::resolve_media_url_info( $parts[0], $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+						$info = Push_MD_Media::resolve_media_url_info( $parts[0], $post_id, $uploaded_media_map, $commit_files, $uploaded_cache, $dry_run );
 						if ( $info && ! empty( $info['url'] ) ) {
 							$descriptor  = isset( $parts[1] ) ? ' ' . $parts[1] : '';
 							$rewritten[] = $info['url'] . $descriptor;
@@ -470,7 +479,7 @@ class Push_MD_Media {
 		// 5. Gutenberg Block Comment JSON metadata: <!-- wp:image {"id":0,"url":"../media/chart.png"} -->
 		$post_content = preg_replace_callback(
 			'/<!--\s+wp:(?P<name>[a-z0-9\/-]+)\s+(?P<json>\{.*?\})\s+-->/i',
-			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, $dry_run ) {
 				$full_match = $matches[0];
 				$block_name = $matches['name'];
 				$json_str   = $matches['json'];
@@ -483,13 +492,13 @@ class Push_MD_Media {
 				$changed  = false;
 				$found_id = 0;
 
-				$walker = function ( &$data ) use ( &$walker, $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, &$changed, &$found_id ) {
+				$walker = function ( &$data ) use ( &$walker, $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, &$changed, &$found_id, $dry_run ) {
 					if ( ! is_array( $data ) ) {
 						return;
 					}
 					foreach ( $data as $key => &$val ) {
 						if ( is_string( $val ) ) {
-							$info = Push_MD_Media::resolve_media_url_info( $val, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
+							$info = Push_MD_Media::resolve_media_url_info( $val, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache, $dry_run );
 							if ( $info && ! empty( $info['url'] ) ) {
 								$val     = $info['url'];
 								$changed = true;
@@ -519,7 +528,7 @@ class Push_MD_Media {
 						$changed            = true;
 					}
 					if ( '' !== $alt_text || '' !== $title_text || '' !== $caption_text ) {
-						Push_MD_Media::update_attachment_metadata_from_context( $found_id, $alt_text, $title_text, $caption_text );
+						Push_MD_Media::update_attachment_metadata_from_context( $found_id, $alt_text, $title_text, $caption_text, $dry_run );
 					}
 				}
 
@@ -567,10 +576,10 @@ class Push_MD_Media {
 	 * @param array $uploaded_media_map Pre-uploaded media map.
 	 * @param array $commit_files       Pushed commit payload files ($path => entry).
 	 */
-	public static function handle_featured_image( $post_id, $img_val, $uploaded_media_map = array(), $commit_files = array() ) {
+	public static function handle_featured_image( $post_id, $img_val, $uploaded_media_map = array(), $commit_files = array(), $dry_run = false ) {
 		$img_val = trim( (string) $img_val );
 		if ( '' === $img_val ) {
-			if ( function_exists( 'delete_post_thumbnail' ) ) {
+			if ( ! $dry_run && function_exists( 'delete_post_thumbnail' ) ) {
 				delete_post_thumbnail( $post_id );
 			}
 			return;
@@ -581,7 +590,7 @@ class Push_MD_Media {
 			$att_id = (int) $img_val;
 			$post   = function_exists( 'get_post' ) ? get_post( $att_id ) : null;
 			if ( $post && 'attachment' === $post->post_type ) {
-				if ( function_exists( 'set_post_thumbnail' ) ) {
+				if ( ! $dry_run && function_exists( 'set_post_thumbnail' ) ) {
 					set_post_thumbnail( $post_id, $att_id );
 				}
 				return;
@@ -594,7 +603,7 @@ class Push_MD_Media {
 				$att_id = attachment_url_to_postid( $img_val );
 				if ( $att_id > 0 ) {
 					$current_thumb = function_exists( 'get_post_thumbnail_id' ) ? get_post_thumbnail_id( $post_id ) : 0;
-					if ( (int) $current_thumb !== (int) $att_id && function_exists( 'set_post_thumbnail' ) ) {
+					if ( ! $dry_run && (int) $current_thumb !== (int) $att_id && function_exists( 'set_post_thumbnail' ) ) {
 						set_post_thumbnail( $post_id, $att_id );
 					}
 					return;
@@ -618,13 +627,15 @@ class Push_MD_Media {
 			}
 
 			if ( 0 === $attachment_id && isset( $commit_files[ $clean_path ]['content'] ) ) {
-				$upload        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
-				$attachment_id = $upload['attachment_id'];
+				if ( ! $dry_run ) {
+					$upload        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
+					$attachment_id = $upload['attachment_id'];
+				}
 			} elseif ( 0 === $attachment_id ) {
 				$attachment_id = self::find_existing_attachment_id_by_filename( basename( $clean_path ) );
 			}
 
-			if ( $attachment_id > 0 && function_exists( 'set_post_thumbnail' ) ) {
+			if ( ! $dry_run && $attachment_id > 0 && function_exists( 'set_post_thumbnail' ) ) {
 				set_post_thumbnail( $post_id, $attachment_id );
 			}
 		}
