@@ -1,0 +1,461 @@
+<?php
+
+use WordPress\Git\Model\TreeEntry;
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Media Handler for Push MD – handles validation, uploading, inline image path
+ * rewriting, featured image assignment, and git pull media export.
+ */
+class Push_MD_Media {
+
+	/**
+	 * Whitelisted image file extensions.
+	 *
+	 * @var array
+	 */
+	public static $allowed_extensions = array( 'png', 'jpg', 'jpeg', 'gif', 'webp' );
+
+	/**
+	 * Whitelisted image MIME types.
+	 *
+	 * @var array
+	 */
+	public static $allowed_mime_types = array(
+		'image/png',
+		'image/jpeg',
+		'image/gif',
+		'image/webp',
+	);
+
+	/**
+	 * Check if a repository path is inside the media directory.
+	 *
+	 * @param string $path Repository file path.
+	 * @return bool True if under media/ directory.
+	 */
+	public static function is_media_path( $path ) {
+		$path = ltrim( (string) $path, '/' );
+		return 0 === strpos( $path, 'media/' ) || 'media' === $path;
+	}
+
+	/**
+	 * Safe esc_html wrapper for test environments without WordPress functions loaded.
+	 *
+	 * @param string $text Input text.
+	 * @return string Escaped string.
+	 */
+	private static function safe_esc( $text ) {
+		return function_exists( 'esc_html' ) ? esc_html( (string) $text ) : htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' );
+	}
+
+	/**
+	 * Validate a media file path, extension, and binary content (fail-closed).
+	 *
+	 * @param string $path         Repository path (must be under media/).
+	 * @param string $binary_data Raw binary file content.
+	 * @throws Exception If path, extension, MIME type, or binary is invalid.
+	 */
+	public static function validate_media_file( $path, $binary_data ) {
+		$path = ltrim( (string) $path, '/' );
+
+		// Path traversal protection.
+		if ( false !== strpos( $path, '..' ) || 0 === strpos( $path, '/' ) ) {
+			throw new Exception( 'Push rejected because media path contains invalid characters or path traversal: ' . self::safe_esc( $path ) );
+		}
+
+		if ( ! self::is_media_path( $path ) ) {
+			throw new Exception( 'Push rejected because media files must be placed within the media/ directory: ' . self::safe_esc( $path ) );
+		}
+
+		$filename  = basename( $path );
+		$extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
+
+		if ( empty( $extension ) || ! in_array( $extension, self::$allowed_extensions, true ) ) {
+			throw new Exception( 'Push rejected because file extension is not a supported image type (.png, .jpg, .jpeg, .gif, .webp): ' . self::safe_esc( $filename ) );
+		}
+
+		// Check WP filetype validation.
+		if ( function_exists( 'wp_check_filetype' ) ) {
+			$wp_filetype = wp_check_filetype( $filename );
+			if ( empty( $wp_filetype['ext'] ) || ! in_array( strtolower( $wp_filetype['ext'] ), self::$allowed_extensions, true ) ) {
+				throw new Exception( 'Push rejected because file extension fails WordPress filetype check: ' . self::safe_esc( $filename ) );
+			}
+		}
+
+		// Validate raw binary data with finfo.
+		if ( empty( $binary_data ) ) {
+			throw new Exception( 'Push rejected because media file binary is empty or corrupted: ' . self::safe_esc( $filename ) );
+		}
+
+		$mime_type = self::detect_mime_type( $binary_data, $filename );
+		if ( empty( $mime_type ) || ! in_array( $mime_type, self::$allowed_mime_types, true ) ) {
+			throw new Exception( 'Push rejected because detected MIME type (' . self::safe_esc( (string) $mime_type ) . ') is not a supported image type: ' . self::safe_esc( $filename ) );
+		}
+	}
+
+	/**
+	 * Detect MIME type using finfo_buffer or fallback headers.
+	 *
+	 * @param string $binary_data Raw binary content.
+	 * @param string $filename    Filename for extension fallback.
+	 * @return string MIME type or empty string.
+	 */
+	public static function detect_mime_type( $binary_data, $filename = '' ) {
+		if ( function_exists( 'finfo_open' ) && function_exists( 'finfo_buffer' ) ) {
+			$finfo = finfo_open( FILEINFO_MIME_TYPE );
+			if ( $finfo ) {
+				$mime = finfo_buffer( $finfo, $binary_data );
+				if ( is_string( $mime ) && '' !== $mime ) {
+					return strtolower( trim( $mime ) );
+				}
+			}
+		}
+
+		// Fallback detection via binary magic numbers if finfo is unavailable.
+		if ( strlen( $binary_data ) >= 8 ) {
+			if ( 0 === strpos( $binary_data, "\x89PNG\r\n\x1a\n" ) ) {
+				return 'image/png';
+			}
+			if ( 0 === strpos( $binary_data, "\xFF\xD8\xFF" ) ) {
+				return 'image/jpeg';
+			}
+			if ( 0 === strpos( $binary_data, 'GIF87a' ) || 0 === strpos( $binary_data, 'GIF89a' ) ) {
+				return 'image/gif';
+			}
+			if ( 0 === strpos( $binary_data, 'RIFF' ) && 'WEBP' === substr( $binary_data, 8, 4 ) ) {
+				return 'image/webp';
+			}
+		}
+
+		if ( function_exists( 'wp_check_filetype' ) && '' !== $filename ) {
+			$check = wp_check_filetype( $filename );
+			if ( ! empty( $check['type'] ) ) {
+				return strtolower( trim( $check['type'] ) );
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Upload a media binary file to WordPress Uploads and create attachment.
+	 *
+	 * @param string $rel_path    Relative path in repo (e.g. media/chart.png).
+	 * @param string $binary_data Binary image data.
+	 * @param int    $parent_post_id Parent post ID to attach to (optional).
+	 * @return array Array with 'attachment_id' and 'url'.
+	 * @throws Exception On upload failure.
+	 */
+	public static function upload_media_asset( $rel_path, $binary_data, $parent_post_id = 0 ) {
+		self::validate_media_file( $rel_path, $binary_data );
+
+		$filename = basename( $rel_path );
+
+		// Use wp_upload_bits to save file.
+		if ( function_exists( 'wp_upload_bits' ) ) {
+			$upload = wp_upload_bits( $filename, null, $binary_data );
+			if ( ! empty( $upload['error'] ) ) {
+				throw new Exception( 'Failed to upload media file (' . esc_html( $filename ) . '): ' . esc_html( $upload['error'] ) );
+			}
+
+			$file_path = $upload['file'];
+			$url       = $upload['url'];
+		} else {
+			// Test environment fallback.
+			$upload_dir = function_exists( 'wp_upload_dir' ) ? wp_upload_dir() : array(
+				'path' => sys_get_temp_dir(),
+				'url'  => 'http://example.org/wp-content/uploads',
+			);
+			$file_path  = rtrim( $upload_dir['path'], '/' ) . '/' . $filename;
+			file_put_contents( $file_path, $binary_data );
+			$url = rtrim( $upload_dir['url'], '/' ) . '/' . $filename;
+		}
+
+		$mime_type = self::detect_mime_type( $binary_data, $filename );
+
+		$title_name = function_exists( 'sanitize_file_name' ) ? sanitize_file_name( pathinfo( $filename, PATHINFO_FILENAME ) ) : pathinfo( $filename, PATHINFO_FILENAME );
+
+		$attachment = array(
+			'post_mime_type' => $mime_type,
+			'post_title'     => $title_name,
+			'post_content'   => '',
+			'post_status'    => 'inherit',
+		);
+
+		$attachment_id = 0;
+		if ( function_exists( 'wp_insert_attachment' ) ) {
+			$attachment_id = wp_insert_attachment( $attachment, $file_path, $parent_post_id );
+			if ( ! is_wp_error( $attachment_id ) && $attachment_id > 0 ) {
+				if ( function_exists( 'wp_generate_attachment_metadata' ) && file_exists( $file_path ) ) {
+					require_once ABSPATH . 'wp-admin/includes/image.php';
+					$attach_data = wp_generate_attachment_metadata( $attachment_id, $file_path );
+					if ( function_exists( 'wp_update_attachment_metadata' ) && ! empty( $attach_data ) ) {
+						wp_update_attachment_metadata( $attachment_id, $attach_data );
+					}
+				}
+				$attachment_url = wp_get_attachment_url( $attachment_id );
+				if ( $attachment_url ) {
+					$url = $attachment_url;
+				}
+			}
+		}
+
+		return array(
+			'attachment_id' => is_numeric( $attachment_id ) ? (int) $attachment_id : 0,
+			'url'           => $url,
+			'file_path'     => $file_path,
+		);
+	}
+
+	/**
+	 * Process media files in a pushed commit payload and rewrite relative image URLs in Markdown post content.
+	 *
+	 * @param int    $post_id      Post ID.
+	 * @param string $post_content Block/HTML markup or Markdown content.
+	 * @param array  $commit_files Array of file entries from pushed commit ($path => array('mode' => ..., 'content' => ...)).
+	 * @return string Updated post content with rewritten absolute attachment URLs.
+	 */
+	public static function rewrite_inline_image_paths( $post_id, $post_content, $commit_files = array() ) {
+		if ( empty( $post_content ) || ! is_string( $post_content ) ) {
+			return $post_content;
+		}
+
+		$uploaded_cache = array();
+
+		// Callback for rewriting relative image paths.
+		$rewrite_callback = function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+			$full_match   = $matches[0];
+			$relative_url = isset( $matches['url'] ) ? $matches['url'] : ( isset( $matches[2] ) ? $matches[2] : '' );
+
+			if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
+				return $full_match;
+			}
+
+			// Clean relative prefix (e.g. "../media/chart.png", "./media/chart.png", "media/chart.png").
+			$clean_path = self::normalize_relative_media_path( $relative_url );
+			if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
+				return $full_match;
+			}
+
+			if ( isset( $uploaded_cache[ $clean_path ] ) ) {
+				return str_replace( $relative_url, $uploaded_cache[ $clean_path ], $full_match );
+			}
+
+			// Find image in commit payload.
+			if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+				$upload                        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
+				$uploaded_cache[ $clean_path ] = $upload['url'];
+				return str_replace( $relative_url, $upload['url'], $full_match );
+			}
+
+			// Fallback: check if existing attachment exists with filename.
+			$existing_url = self::find_existing_attachment_url_by_filename( basename( $clean_path ) );
+			if ( $existing_url ) {
+				$uploaded_cache[ $clean_path ] = $existing_url;
+				return str_replace( $relative_url, $existing_url, $full_match );
+			}
+
+			return $full_match;
+		};
+
+		// 1. Markdown image syntax: ![alt](url)
+		$post_content = preg_replace_callback(
+			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+"[^"]*")?\)/i',
+			$rewrite_callback,
+			$post_content
+		);
+
+		// 2. HTML img tag src attribute: <img ... src="url" ... />
+		$post_content = preg_replace_callback(
+			'/<img\b[^>]*?\bsrc=["\'](?P<url>[^"\']+)["\'][^>]*>/i',
+			$rewrite_callback,
+			$post_content
+		);
+
+		return $post_content;
+	}
+
+	/**
+	 * Normalize relative media path (e.g. "../media/cover.png" -> "media/cover.png").
+	 *
+	 * @param string $path Relative path string.
+	 * @return string Normalized path starting with media/.
+	 */
+	public static function normalize_relative_media_path( $path ) {
+		$path = trim( (string) $path );
+		$path = preg_replace( '#^\.\.?/#', '', $path );
+		$path = ltrim( $path, '/' );
+
+		// Handle multi-level ../ (e.g., "../../media/cover.png").
+		while ( 0 === strpos( $path, '../' ) || 0 === strpos( $path, './' ) ) {
+			$path = preg_replace( '#^\.\.?/#', '', $path );
+		}
+
+		if ( 0 === strpos( $path, 'media/' ) || 'media' === $path ) {
+			return $path;
+		}
+
+		return '';
+	}
+
+	/**
+	 * Assign featured image for a post based on frontmatter value.
+	 *
+	 * @param int   $post_id      Post ID.
+	 * @param mixed $img_val      Featured image value from frontmatter.
+	 * @param array $commit_files Pushed commit payload files ($path => entry).
+	 */
+	public static function handle_featured_image( $post_id, $img_val, $commit_files = array() ) {
+		$img_val = trim( (string) $img_val );
+		if ( '' === $img_val ) {
+			if ( function_exists( 'delete_post_thumbnail' ) ) {
+				delete_post_thumbnail( $post_id );
+			}
+			return;
+		}
+
+		// 1. Check if numeric attachment ID.
+		if ( is_numeric( $img_val ) ) {
+			$att_id = (int) $img_val;
+			$post   = function_exists( 'get_post' ) ? get_post( $att_id ) : null;
+			if ( $post && 'attachment' === $post->post_type ) {
+				if ( function_exists( 'set_post_thumbnail' ) ) {
+					set_post_thumbnail( $post_id, $att_id );
+				}
+				return;
+			}
+		}
+
+		// 2. Check if absolute URL.
+		if ( 0 === strpos( $img_val, 'http://' ) || 0 === strpos( $img_val, 'https://' ) || 0 === strpos( $img_val, '//' ) ) {
+			if ( function_exists( 'attachment_url_to_postid' ) ) {
+				$att_id = attachment_url_to_postid( $img_val );
+				if ( $att_id > 0 ) {
+					$current_thumb = function_exists( 'get_post_thumbnail_id' ) ? get_post_thumbnail_id( $post_id ) : 0;
+					if ( (int) $current_thumb !== (int) $att_id && function_exists( 'set_post_thumbnail' ) ) {
+						set_post_thumbnail( $post_id, $att_id );
+					}
+					return;
+				}
+			}
+			// Pointing to another URL: ignore.
+			return;
+		}
+
+		// 3. Relative media path pointing to media/ directory.
+		$clean_path = self::normalize_relative_media_path( $img_val );
+		if ( '' !== $clean_path && self::is_media_path( $clean_path ) ) {
+			$attachment_id = 0;
+
+			// If in commit payload, upload image.
+			if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+				$upload        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
+				$attachment_id = $upload['attachment_id'];
+			} else {
+				// Search existing attachment by filename.
+				$attachment_id = self::find_existing_attachment_id_by_filename( basename( $clean_path ) );
+			}
+
+			if ( $attachment_id > 0 && function_exists( 'set_post_thumbnail' ) ) {
+				set_post_thumbnail( $post_id, $attachment_id );
+			}
+		}
+	}
+
+	/**
+	 * Find attachment ID by filename.
+	 *
+	 * @param string $filename Image filename.
+	 * @return int Attachment ID or 0.
+	 */
+	public static function find_existing_attachment_id_by_filename( $filename ) {
+		if ( ! function_exists( 'get_posts' ) ) {
+			return 0;
+		}
+
+		$attachments = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'posts_per_page' => 1,
+				'meta_query'     => array(
+					array(
+						'key'     => '_wp_attached_file',
+						'value'   => $filename,
+						'compare' => 'LIKE',
+					),
+				),
+			)
+		);
+
+		if ( ! empty( $attachments ) && isset( $attachments[0]->ID ) ) {
+			return (int) $attachments[0]->ID;
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Find attachment URL by filename.
+	 *
+	 * @param string $filename Image filename.
+	 * @return string Attachment URL or empty string.
+	 */
+	public static function find_existing_attachment_url_by_filename( $filename ) {
+		$att_id = self::find_existing_attachment_id_by_filename( $filename );
+		if ( $att_id > 0 && function_exists( 'wp_get_attachment_url' ) ) {
+			$url = wp_get_attachment_url( $att_id );
+			return $url ? $url : '';
+		}
+
+		return '';
+	}
+
+	/**
+	 * Export media library image attachments to media/ entries for Git export/pull.
+	 *
+	 * @return array Array of Git tree entries ($path => array('mode' => ..., 'content' => ...)).
+	 */
+	public static function export_media_content() {
+		$entries = array();
+
+		if ( ! function_exists( 'get_posts' ) ) {
+			return $entries;
+		}
+
+		$attachments = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'posts_per_page' => -1,
+				'post_mime_type' => 'image',
+			)
+		);
+
+		foreach ( $attachments as $attachment ) {
+			$file_path = get_attached_file( $attachment->ID );
+			if ( ! $file_path || ! file_exists( $file_path ) ) {
+				continue;
+			}
+
+			$filename   = basename( $file_path );
+			$media_path = 'media/' . $filename;
+
+			$content = file_get_contents( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+			if ( false === $content ) {
+				continue;
+			}
+
+			$entries[ $media_path ] = array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $content,
+			);
+		}
+
+		return $entries;
+	}
+}
