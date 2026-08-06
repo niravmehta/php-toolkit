@@ -137,6 +137,58 @@ class MediaSupportTest extends TestCase {
 		$this->assertTrue( true );
 	}
 
+	public function testRewriteInlineImagePathsPictureAndFigure() {
+		$post_content = '<picture><source srcset="../media/cover-large.webp 1200w, ../media/cover-small.webp 600w" /><img src="../media/cover.png" alt="Cover" /></picture><figure class="wp-block-image"><a href="../media/full.png"><img src="../media/thumb.png" /></a></figure>';
+
+		$commit_files = array(
+			'media/cover-large.webp' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+			'media/cover-small.webp' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+			'media/cover.png'        => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+			'media/full.png'         => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+			'media/thumb.png'        => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+		);
+
+		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 10, $post_content, $commit_files );
+
+		$this->assertStringNotContainsString( '../media/cover-large.webp', $rewritten );
+		$this->assertStringNotContainsString( '../media/cover-small.webp', $rewritten );
+		$this->assertStringNotContainsString( '../media/cover.png', $rewritten );
+		$this->assertStringNotContainsString( '../media/full.png', $rewritten );
+		$this->assertStringNotContainsString( '../media/thumb.png', $rewritten );
+		$this->assertStringContainsString( 'cover-large.webp 1200w', $rewritten );
+	}
+
+	public function testRewriteInlineImagePathsGutenbergBlock() {
+		$post_content = '<!-- wp:image {"id":0,"url":"../media/chart.png","sizeSlug":"full"} --><figure class="wp-block-image"><img src="../media/chart.png" alt=""/></figure><!-- /wp:image -->';
+
+		$commit_files = array(
+			'media/chart.png' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+		);
+
+		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 20, $post_content, $commit_files );
+
+		$this->assertStringNotContainsString( '../media/chart.png', $rewritten );
+		$this->assertStringContainsString( 'chart.png', $rewritten );
+	}
+
 	public function testFeaturedImageExternalUrlIgnored() {
 		// External URLs should be safely ignored without raising errors.
 		Push_MD_Media::handle_featured_image( 102, 'https://external-domain.com/untrusted-image.jpg', array() );

@@ -212,7 +212,57 @@ class Push_MD_Media {
 	}
 
 	/**
-	 * Process media files in a pushed commit payload and rewrite relative image URLs in Markdown post content.
+	 * Resolve a relative URL pointing to a media/ file, upload it if present in $commit_files,
+	 * and return an array with 'url' and 'id', or null if not a relative media URL.
+	 *
+	 * @param string $relative_url  Relative URL string.
+	 * @param int    $post_id       Post ID.
+	 * @param array  $commit_files  Commit files payload.
+	 * @param array  $uploaded_cache Upload cache array reference.
+	 * @return array|null Array with 'url' and 'id', or null.
+	 */
+	public static function resolve_media_url_info( $relative_url, $post_id, $commit_files = array(), &$uploaded_cache = array() ) {
+		$relative_url = trim( (string) $relative_url );
+		if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
+			return null;
+		}
+
+		$clean_path = self::normalize_relative_media_path( $relative_url );
+		if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
+			return null;
+		}
+
+		if ( isset( $uploaded_cache[ $clean_path ] ) ) {
+			return $uploaded_cache[ $clean_path ];
+		}
+
+		if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+			$upload                        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
+			$info                          = array(
+				'url' => $upload['url'],
+				'id'  => $upload['attachment_id'],
+			);
+			$uploaded_cache[ $clean_path ] = $info;
+			return $info;
+		}
+
+		$existing_id  = self::find_existing_attachment_id_by_filename( basename( $clean_path ) );
+		$existing_url = self::find_existing_attachment_url_by_filename( basename( $clean_path ) );
+		if ( $existing_url ) {
+			$info                          = array(
+				'url' => $existing_url,
+				'id'  => $existing_id,
+			);
+			$uploaded_cache[ $clean_path ] = $info;
+			return $info;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Process media files in a pushed commit payload and rewrite relative image URLs in Markdown, HTML,
+	 * picture/figure tags, srcset attributes, and Gutenberg block comment JSON metadata.
 	 *
 	 * @param int    $post_id      Post ID.
 	 * @param string $post_content Block/HTML markup or Markdown content.
@@ -226,53 +276,127 @@ class Push_MD_Media {
 
 		$uploaded_cache = array();
 
-		// Callback for rewriting relative image paths.
-		$rewrite_callback = function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
-			$full_match   = $matches[0];
-			$relative_url = isset( $matches['url'] ) ? $matches['url'] : ( isset( $matches[2] ) ? $matches[2] : '' );
-
-			if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
-				return $full_match;
-			}
-
-			// Clean relative prefix (e.g. "../media/chart.png", "./media/chart.png", "media/chart.png").
-			$clean_path = self::normalize_relative_media_path( $relative_url );
-			if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
-				return $full_match;
-			}
-
-			if ( isset( $uploaded_cache[ $clean_path ] ) ) {
-				return str_replace( $relative_url, $uploaded_cache[ $clean_path ], $full_match );
-			}
-
-			// Find image in commit payload.
-			if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
-				$upload                        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
-				$uploaded_cache[ $clean_path ] = $upload['url'];
-				return str_replace( $relative_url, $upload['url'], $full_match );
-			}
-
-			// Fallback: check if existing attachment exists with filename.
-			$existing_url = self::find_existing_attachment_url_by_filename( basename( $clean_path ) );
-			if ( $existing_url ) {
-				$uploaded_cache[ $clean_path ] = $existing_url;
-				return str_replace( $relative_url, $existing_url, $full_match );
-			}
-
-			return $full_match;
-		};
-
 		// 1. Markdown image syntax: ![alt](url)
 		$post_content = preg_replace_callback(
 			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+"[^"]*")?\)/i',
-			$rewrite_callback,
+			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+				$full_match   = $matches[0];
+				$relative_url = $matches['url'];
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $commit_files, $uploaded_cache );
+				if ( $info && ! empty( $info['url'] ) ) {
+					return str_replace( $relative_url, $info['url'], $full_match );
+				}
+				return $full_match;
+			},
 			$post_content
 		);
 
-		// 2. HTML img tag src attribute: <img ... src="url" ... />
+		// 2. HTML attributes (src, href, poster, data-src, etc.) on any tag (<img/>, <source/>, <figure>, <a>, etc.)
 		$post_content = preg_replace_callback(
-			'/<img\b[^>]*?\bsrc=["\'](?P<url>[^"\']+)["\'][^>]*>/i',
-			$rewrite_callback,
+			'/\b(?P<attr>src|href|poster|data-[a-z0-9_-]+)=["\'](?P<url>[^"\']+)["\']/i',
+			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+				$full_match   = $matches[0];
+				$attr_name    = $matches['attr'];
+				$relative_url = $matches['url'];
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $commit_files, $uploaded_cache );
+				if ( $info && ! empty( $info['url'] ) ) {
+					return $attr_name . '="' . $info['url'] . '"';
+				}
+				return $full_match;
+			},
+			$post_content
+		);
+
+		// 3. HTML srcset attributes (e.g. srcset="../media/c1.png 1x, ../media/c2.png 2x")
+		$post_content = preg_replace_callback(
+			'/\b(?P<attr>srcset)=["\'](?P<val>[^"\']+)["\']/i',
+			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+				$full_match = $matches[0];
+				$srcset_val = $matches['val'];
+				$entries    = explode( ',', $srcset_val );
+				$rewritten  = array();
+				$changed    = false;
+
+				foreach ( $entries as $entry ) {
+					$trimmed = trim( $entry );
+					$parts   = preg_split( '/\s+/', $trimmed, 2 );
+					if ( ! empty( $parts[0] ) ) {
+						$info = Push_MD_Media::resolve_media_url_info( $parts[0], $post_id, $commit_files, $uploaded_cache );
+						if ( $info && ! empty( $info['url'] ) ) {
+							$descriptor  = isset( $parts[1] ) ? ' ' . $parts[1] : '';
+							$rewritten[] = $info['url'] . $descriptor;
+							$changed     = true;
+							continue;
+						}
+					}
+					$rewritten[] = $trimmed;
+				}
+
+				if ( $changed ) {
+					return 'srcset="' . implode( ', ', $rewritten ) . '"';
+				}
+
+				return $full_match;
+			},
+			$post_content
+		);
+
+		// 4. Gutenberg Block Comment JSON metadata: <!-- wp:image {"id":0,"url":"../media/chart.png"} -->
+		$post_content = preg_replace_callback(
+			'/<!--\s+wp:(?P<name>[a-z0-9\/-]+)\s+(?P<json>\{.*?\})\s+-->/i',
+			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+				$full_match = $matches[0];
+				$block_name = $matches['name'];
+				$json_str   = $matches['json'];
+
+				$decoded = json_decode( $json_str, true );
+				if ( ! is_array( $decoded ) ) {
+					return $full_match;
+				}
+
+				$changed  = false;
+				$found_id = 0;
+
+				$walker = function ( &$data ) use ( &$walker, $post_id, $commit_files, &$uploaded_cache, &$changed, &$found_id ) {
+					if ( ! is_array( $data ) ) {
+						return;
+					}
+					foreach ( $data as $key => &$val ) {
+						if ( is_string( $val ) ) {
+							$info = Push_MD_Media::resolve_media_url_info( $val, $post_id, $commit_files, $uploaded_cache );
+							if ( $info && ! empty( $info['url'] ) ) {
+								$val     = $info['url'];
+								$changed = true;
+								if ( ! empty( $info['id'] ) ) {
+									$found_id = $info['id'];
+								}
+							}
+						} elseif ( is_array( $val ) ) {
+							$walker( $val );
+						}
+					}
+				};
+
+				$walker( $decoded );
+
+				if ( $found_id > 0 ) {
+					if ( array_key_exists( 'id', $decoded ) ) {
+						$decoded['id'] = $found_id;
+						$changed       = true;
+					}
+					if ( array_key_exists( 'mediaId', $decoded ) ) {
+						$decoded['mediaId'] = $found_id;
+						$changed            = true;
+					}
+				}
+
+				if ( $changed ) {
+					$new_json = function_exists( 'wp_json_encode' ) ? wp_json_encode( $decoded, JSON_UNESCAPED_SLASHES ) : json_encode( $decoded, JSON_UNESCAPED_SLASHES );
+					return '<!-- wp:' . $block_name . ' ' . $new_json . ' -->';
+				}
+
+				return $full_match;
+			},
 			$post_content
 		);
 
