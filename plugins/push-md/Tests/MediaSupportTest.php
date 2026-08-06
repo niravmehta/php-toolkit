@@ -183,10 +183,25 @@ class MediaSupportTest extends TestCase {
 			),
 		);
 
-		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 20, $post_content, $commit_files );
+		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 20, $post_content, array(), $commit_files );
 
 		$this->assertStringNotContainsString( '../media/chart.png', $rewritten );
 		$this->assertStringContainsString( 'chart.png', $rewritten );
+	}
+
+	public function testAttachmentMetadataExtraction() {
+		$post_content = '![Architecture Alt Text](../media/arch-diagram.png "Architecture Title")';
+
+		$commit_files = array(
+			'media/arch-diagram.png' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+		);
+
+		$rewritten = Push_MD_Media::rewrite_inline_image_paths( 10, $post_content, array(), $commit_files );
+		$this->assertStringNotContainsString( '../media/arch-diagram.png', $rewritten );
+		$this->assertStringContainsString( 'arch-diagram.png', $rewritten );
 	}
 
 	public function testFeaturedImageExternalUrlIgnored() {
