@@ -98,6 +98,46 @@ class Push_MD_Media {
 	}
 
 	/**
+	 * Validate and upload all media files in a pushed commit upfront.
+	 * Returns a map of normalized media path => array('url' => string, 'id' => int).
+	 *
+	 * @param array $commit_files Pushed commit tree entries ($path => array('mode' => ..., 'content' => ...)).
+	 * @param bool  $dry_run      If true, validate only without writing uploads.
+	 * @return array Map of clean media path to media info array.
+	 * @throws Exception On validation or upload failure.
+	 */
+	public static function process_commit_media_files( $commit_files = array(), $dry_run = false ) {
+		$uploaded_map = array();
+
+		if ( ! is_array( $commit_files ) ) {
+			return $uploaded_map;
+		}
+
+		foreach ( $commit_files as $path => $entry ) {
+			if ( ! self::is_media_path( $path ) ) {
+				continue;
+			}
+
+			// Fail-closed validation for all media files in commit.
+			self::validate_media_file( $path, isset( $entry['content'] ) ? $entry['content'] : '' );
+
+			if ( $dry_run ) {
+				continue;
+			}
+
+			$clean_path = self::normalize_relative_media_path( $path );
+			$upload     = self::upload_media_asset( $clean_path, $entry['content'] );
+
+			$uploaded_map[ $clean_path ] = array(
+				'url' => $upload['url'],
+				'id'  => $upload['attachment_id'],
+			);
+		}
+
+		return $uploaded_map;
+	}
+
+	/**
 	 * Detect MIME type using finfo_buffer or fallback headers.
 	 *
 	 * @param string $binary_data Raw binary content.
@@ -221,7 +261,7 @@ class Push_MD_Media {
 	 * @param array  $uploaded_cache Upload cache array reference.
 	 * @return array|null Array with 'url' and 'id', or null.
 	 */
-	public static function resolve_media_url_info( $relative_url, $post_id, $commit_files = array(), &$uploaded_cache = array() ) {
+	public static function resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map = array(), $commit_files = array(), &$uploaded_cache = array() ) {
 		$relative_url = trim( (string) $relative_url );
 		if ( '' === $relative_url || 0 === strpos( $relative_url, 'http://' ) || 0 === strpos( $relative_url, 'https://' ) || 0 === strpos( $relative_url, '//' ) || 0 === strpos( $relative_url, 'data:' ) ) {
 			return null;
@@ -230,6 +270,15 @@ class Push_MD_Media {
 		$clean_path = self::normalize_relative_media_path( $relative_url );
 		if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
 			return null;
+		}
+
+		if ( is_array( $uploaded_media_map ) ) {
+			if ( isset( $uploaded_media_map[ $clean_path ]['url'] ) ) {
+				return $uploaded_media_map[ $clean_path ];
+			}
+			if ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map['media/' . basename( $clean_path )]['content'] ) ) ) {
+				$commit_files = $uploaded_media_map;
+			}
 		}
 
 		if ( isset( $uploaded_cache[ $clean_path ] ) ) {
@@ -269,7 +318,7 @@ class Push_MD_Media {
 	 * @param array  $commit_files Array of file entries from pushed commit ($path => array('mode' => ..., 'content' => ...)).
 	 * @return string Updated post content with rewritten absolute attachment URLs.
 	 */
-	public static function rewrite_inline_image_paths( $post_id, $post_content, $commit_files = array() ) {
+	public static function rewrite_inline_image_paths( $post_id, $post_content, $uploaded_media_map = array(), $commit_files = array() ) {
 		if ( empty( $post_content ) || ! is_string( $post_content ) ) {
 			return $post_content;
 		}
@@ -279,10 +328,10 @@ class Push_MD_Media {
 		// 1. Markdown image syntax: ![alt](url)
 		$post_content = preg_replace_callback(
 			'/!\[(?P<alt>[^\]]*)\]\((?P<url>[^\s\)]+)(?:\s+"[^"]*")?\)/i',
-			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
 				$full_match   = $matches[0];
 				$relative_url = $matches['url'];
-				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $commit_files, $uploaded_cache );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
 				if ( $info && ! empty( $info['url'] ) ) {
 					return str_replace( $relative_url, $info['url'], $full_match );
 				}
@@ -294,11 +343,11 @@ class Push_MD_Media {
 		// 2. HTML attributes (src, href, poster, data-src, etc.) on any tag (<img/>, <source/>, <figure>, <a>, etc.)
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>src|href|poster|data-[a-z0-9_-]+)=["\'](?P<url>[^"\']+)["\']/i',
-			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
 				$full_match   = $matches[0];
 				$attr_name    = $matches['attr'];
 				$relative_url = $matches['url'];
-				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $commit_files, $uploaded_cache );
+				$info         = Push_MD_Media::resolve_media_url_info( $relative_url, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
 				if ( $info && ! empty( $info['url'] ) ) {
 					return $attr_name . '="' . $info['url'] . '"';
 				}
@@ -310,7 +359,7 @@ class Push_MD_Media {
 		// 3. HTML srcset attributes (e.g. srcset="../media/c1.png 1x, ../media/c2.png 2x")
 		$post_content = preg_replace_callback(
 			'/\b(?P<attr>srcset)=["\'](?P<val>[^"\']+)["\']/i',
-			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
 				$full_match = $matches[0];
 				$srcset_val = $matches['val'];
 				$entries    = explode( ',', $srcset_val );
@@ -321,7 +370,7 @@ class Push_MD_Media {
 					$trimmed = trim( $entry );
 					$parts   = preg_split( '/\s+/', $trimmed, 2 );
 					if ( ! empty( $parts[0] ) ) {
-						$info = Push_MD_Media::resolve_media_url_info( $parts[0], $post_id, $commit_files, $uploaded_cache );
+						$info = Push_MD_Media::resolve_media_url_info( $parts[0], $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
 						if ( $info && ! empty( $info['url'] ) ) {
 							$descriptor  = isset( $parts[1] ) ? ' ' . $parts[1] : '';
 							$rewritten[] = $info['url'] . $descriptor;
@@ -344,7 +393,7 @@ class Push_MD_Media {
 		// 4. Gutenberg Block Comment JSON metadata: <!-- wp:image {"id":0,"url":"../media/chart.png"} -->
 		$post_content = preg_replace_callback(
 			'/<!--\s+wp:(?P<name>[a-z0-9\/-]+)\s+(?P<json>\{.*?\})\s+-->/i',
-			function ( $matches ) use ( $post_id, $commit_files, &$uploaded_cache ) {
+			function ( $matches ) use ( $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache ) {
 				$full_match = $matches[0];
 				$block_name = $matches['name'];
 				$json_str   = $matches['json'];
@@ -357,13 +406,13 @@ class Push_MD_Media {
 				$changed  = false;
 				$found_id = 0;
 
-				$walker = function ( &$data ) use ( &$walker, $post_id, $commit_files, &$uploaded_cache, &$changed, &$found_id ) {
+				$walker = function ( &$data ) use ( &$walker, $post_id, $uploaded_media_map, $commit_files, &$uploaded_cache, &$changed, &$found_id ) {
 					if ( ! is_array( $data ) ) {
 						return;
 					}
 					foreach ( $data as $key => &$val ) {
 						if ( is_string( $val ) ) {
-							$info = Push_MD_Media::resolve_media_url_info( $val, $post_id, $commit_files, $uploaded_cache );
+							$info = Push_MD_Media::resolve_media_url_info( $val, $post_id, $uploaded_media_map, $commit_files, $uploaded_cache );
 							if ( $info && ! empty( $info['url'] ) ) {
 								$val     = $info['url'];
 								$changed = true;
@@ -433,7 +482,7 @@ class Push_MD_Media {
 	 * @param mixed $img_val      Featured image value from frontmatter.
 	 * @param array $commit_files Pushed commit payload files ($path => entry).
 	 */
-	public static function handle_featured_image( $post_id, $img_val, $commit_files = array() ) {
+	public static function handle_featured_image( $post_id, $img_val, $uploaded_media_map = array(), $commit_files = array() ) {
 		$img_val = trim( (string) $img_val );
 		if ( '' === $img_val ) {
 			if ( function_exists( 'delete_post_thumbnail' ) ) {
@@ -475,12 +524,18 @@ class Push_MD_Media {
 		if ( '' !== $clean_path && self::is_media_path( $clean_path ) ) {
 			$attachment_id = 0;
 
-			// If in commit payload, upload image.
-			if ( isset( $commit_files[ $clean_path ]['content'] ) ) {
+			if ( is_array( $uploaded_media_map ) ) {
+				if ( isset( $uploaded_media_map[ $clean_path ]['id'] ) && $uploaded_media_map[ $clean_path ]['id'] > 0 ) {
+					$attachment_id = (int) $uploaded_media_map[ $clean_path ]['id'];
+				} elseif ( empty( $commit_files ) && ( isset( $uploaded_media_map[ $clean_path ]['content'] ) || isset( $uploaded_media_map['media/' . basename( $clean_path )]['content'] ) ) ) {
+					$commit_files = $uploaded_media_map;
+				}
+			}
+
+			if ( 0 === $attachment_id && isset( $commit_files[ $clean_path ]['content'] ) ) {
 				$upload        = self::upload_media_asset( $clean_path, $commit_files[ $clean_path ]['content'], $post_id );
 				$attachment_id = $upload['attachment_id'];
-			} else {
-				// Search existing attachment by filename.
+			} elseif ( 0 === $attachment_id ) {
 				$attachment_id = self::find_existing_attachment_id_by_filename( basename( $clean_path ) );
 			}
 

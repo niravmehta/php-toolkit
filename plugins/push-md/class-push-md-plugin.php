@@ -2506,6 +2506,8 @@ class Push_MD_Plugin {
 			}
 		}
 
+		$uploaded_media_map = Push_MD_Media::process_commit_media_files( $new_files, $dry_run );
+
 		foreach ( $new_files as $path => $entry ) {
 			if ( isset( $old_files[ $path ] ) && self::repository_entries_match( $old_files[ $path ], $entry ) ) {
 				continue;
@@ -2514,7 +2516,6 @@ class Push_MD_Plugin {
 				continue;
 			}
 			if ( Push_MD_Media::is_media_path( $path ) ) {
-				Push_MD_Media::validate_media_file( $path, $entry['content'] );
 				continue;
 			}
 
@@ -2525,6 +2526,7 @@ class Push_MD_Plugin {
 					'dry_run'             => true,
 					'skip_modified_check' => $skip_modified_checks,
 					'commit_files'        => $new_files,
+					'uploaded_media_map' => $uploaded_media_map,
 				)
 			);
 			$post_id = $planned['post_id'];
@@ -2580,6 +2582,7 @@ class Push_MD_Plugin {
 				array(
 					'skip_modified_check' => $skip_modified_checks,
 					'commit_files'        => $new_files,
+					'uploaded_media_map' => $uploaded_media_map,
 				)
 			);
 			if ( $applied['post_id'] ) {
@@ -2847,10 +2850,12 @@ class Push_MD_Plugin {
 			self::assert_can_create_post_type( $post_type );
 		}
 
-		$commit_files = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
-		$post_markup  = Push_MD_Media::rewrite_inline_image_paths(
+		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+		$post_markup         = Push_MD_Media::rewrite_inline_image_paths(
 			$existing_post ? $existing_post->ID : 0,
 			$result->get_block_markup(),
+			$uploaded_media_map,
 			$commit_files
 		);
 
@@ -6008,8 +6013,9 @@ class Push_MD_Plugin {
 	}
 
 	private static function assign_post_featured_image( $post_id, $img_val, $options = array() ) {
-		$commit_files = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
-		Push_MD_Media::handle_featured_image( $post_id, $img_val, $commit_files );
+		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+		Push_MD_Media::handle_featured_image( $post_id, $img_val, $uploaded_media_map, $commit_files );
 	}
 
 	private static function is_yoast_seo_active() {
