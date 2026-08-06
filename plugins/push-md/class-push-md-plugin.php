@@ -5987,11 +5987,18 @@ class Push_MD_Plugin {
 				return (int) $uploaded_media_map[ $clean_path ]['id'];
 			}
 
-			if ( isset( $commit_files[ $clean_path ]['content'] ) || isset( $commit_files[ 'media/' . basename( $clean_path ) ]['content'] ) ) {
+			$fn = basename( $clean_path );
+			if ( isset( $commit_files[ $clean_path ] ) || isset( $commit_files[ 'media/' . $fn ] ) ) {
 				return -1;
 			}
 
-			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( basename( $clean_path ) );
+			foreach ( array_keys( $commit_files ) as $c_path ) {
+				if ( strtolower( basename( $c_path ) ) === strtolower( $fn ) ) {
+					return -1;
+				}
+			}
+
+			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( $fn );
 			if ( $existing_id > 0 ) {
 				return $existing_id;
 			}

@@ -677,6 +677,20 @@ class Push_MD_Media {
 			return (int) $attachments[0]->ID;
 		}
 
+		$slug    = pathinfo( $filename, PATHINFO_FILENAME );
+		$by_slug = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'posts_per_page' => 1,
+				'name'           => function_exists( 'sanitize_title' ) ? sanitize_title( $slug ) : $slug,
+			)
+		);
+
+		if ( ! empty( $by_slug ) && isset( $by_slug[0]->ID ) ) {
+			return (int) $by_slug[0]->ID;
+		}
+
 		return 0;
 	}
 
