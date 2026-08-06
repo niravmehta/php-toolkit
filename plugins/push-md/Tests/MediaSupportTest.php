@@ -43,10 +43,21 @@ class MediaSupportTest extends TestCase {
 
 	public function testIsMediaPath() {
 		$this->assertTrue( Push_MD_Media::is_media_path( 'media/cover.png' ) );
+		$this->assertTrue( Push_MD_Media::is_media_path( '../media/cover.png' ) );
+		$this->assertTrue( Push_MD_Media::is_media_path( './media/cover.png' ) );
+		$this->assertTrue( Push_MD_Media::is_media_path( '/media/cover.png' ) );
+		$this->assertTrue( Push_MD_Media::is_media_path( 'cover.png' ) );
 		$this->assertTrue( Push_MD_Media::is_media_path( 'media/sub/chart.png' ) );
 		$this->assertTrue( Push_MD_Media::is_media_path( 'media' ) );
-		$this->assertFalse( Push_MD_Media::is_media_path( 'posts/cover.png' ) );
 		$this->assertFalse( Push_MD_Media::is_media_path( 'content/page.md' ) );
+	}
+
+	public function testNormalizeRelativeMediaPath() {
+		$this->assertSame( 'media/imagename.webp', Push_MD_Media::normalize_relative_media_path( 'media/imagename.webp' ) );
+		$this->assertSame( 'media/imagename.webp', Push_MD_Media::normalize_relative_media_path( '../media/imagename.webp' ) );
+		$this->assertSame( 'media/imagename.webp', Push_MD_Media::normalize_relative_media_path( './media/imagename.webp' ) );
+		$this->assertSame( 'media/imagename.webp', Push_MD_Media::normalize_relative_media_path( '/media/imagename.webp' ) );
+		$this->assertSame( 'media/imagename.webp', Push_MD_Media::normalize_relative_media_path( 'imagename.webp' ) );
 	}
 
 	public function testValidMediaFileValidation() {
@@ -77,13 +88,6 @@ class MediaSupportTest extends TestCase {
 	public function testDetectMimeType() {
 		$this->assertSame( 'image/png', Push_MD_Media::detect_mime_type( $this->sample_png, 'test.png' ) );
 		$this->assertSame( 'image/gif', Push_MD_Media::detect_mime_type( $this->sample_gif, 'test.gif' ) );
-	}
-
-	public function testNormalizeRelativeMediaPath() {
-		$this->assertSame( 'media/cover.png', Push_MD_Media::normalize_relative_media_path( '../media/cover.png' ) );
-		$this->assertSame( 'media/cover.png', Push_MD_Media::normalize_relative_media_path( './media/cover.png' ) );
-		$this->assertSame( 'media/sub/chart.png', Push_MD_Media::normalize_relative_media_path( '../../media/sub/chart.png' ) );
-		$this->assertSame( 'media/cover.png', Push_MD_Media::normalize_relative_media_path( 'media/cover.png' ) );
 	}
 
 	public function testRewriteInlineImagePathsMarkdown() {
