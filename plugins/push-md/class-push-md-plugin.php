@@ -5786,7 +5786,7 @@ class Push_MD_Plugin {
 		return $val;
 	}
 
-	private static function validate_post_frontmatter_references( $metadata, $post_type ) {
+	private static function validate_post_frontmatter_references( $metadata, $post_type, $options = array() ) {
 		unset( $post_type );
 
 		if ( isset( $metadata['author'] ) && '' !== trim( (string) $metadata['author'] ) ) {
