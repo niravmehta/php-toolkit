@@ -5992,12 +5992,6 @@ class Push_MD_Plugin {
 				return -1;
 			}
 
-			foreach ( array_keys( $commit_files ) as $c_path ) {
-				if ( strtolower( basename( $c_path ) ) === strtolower( $fn ) ) {
-					return -1;
-				}
-			}
-
 			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( $fn );
 			if ( $existing_id > 0 ) {
 				return $existing_id;

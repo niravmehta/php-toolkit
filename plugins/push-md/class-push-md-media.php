@@ -60,15 +60,13 @@ class Push_MD_Media {
 	 * @throws Exception If path, extension, MIME type, or binary is invalid.
 	 */
 	public static function validate_media_file( $path, $binary_data ) {
-		$path = ltrim( (string) $path, '/' );
-
-		// Path traversal protection.
-		if ( false !== strpos( $path, '..' ) || 0 === strpos( $path, '/' ) ) {
-			throw new Exception( 'Push rejected because media path contains invalid characters or path traversal: ' . self::safe_esc( $path ) );
+		$clean_path = self::normalize_relative_media_path( $path );
+		if ( '' === $clean_path || ! self::is_media_path( $clean_path ) ) {
+			throw new Exception( 'Push rejected because media files must be placed within the media/ directory: ' . self::safe_esc( $path ) );
 		}
 
-		if ( ! self::is_media_path( $path ) ) {
-			throw new Exception( 'Push rejected because media files must be placed within the media/ directory: ' . self::safe_esc( $path ) );
+		if ( false !== strpos( $clean_path, '..' ) ) {
+			throw new Exception( 'Push rejected because media path contains invalid characters or path traversal: ' . self::safe_esc( $path ) );
 		}
 
 		$filename  = basename( $path );
