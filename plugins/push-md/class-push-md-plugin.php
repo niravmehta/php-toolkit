@@ -1588,6 +1588,11 @@ class Push_MD_Plugin {
 		self::add_master_taxonomy_and_author_files( $files );
 		self::add_gitignore_file( $files );
 
+		$media_files = Push_MD_Media::export_media_content();
+		foreach ( $media_files as $m_path => $m_entry ) {
+			$files[ $m_path ] = $m_entry;
+		}
+
 		if ( $has_guideline_skills ) {
 			foreach ( self::get_agent_skills_directory_symlink_paths() as $symlink_path => $target ) {
 				$files[ $symlink_path ] = array(
@@ -2487,6 +2492,10 @@ class Push_MD_Plugin {
 			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
 				continue;
 			}
+			if ( Push_MD_Media::is_media_path( $path ) ) {
+				Push_MD_Media::validate_media_file( $path, $entry['content'] );
+				continue;
+			}
 
 			$planned = self::upsert_post_from_markdown(
 				$path,
@@ -2494,6 +2503,7 @@ class Push_MD_Plugin {
 				array(
 					'dry_run'             => true,
 					'skip_modified_check' => $skip_modified_checks,
+					'commit_files'        => $new_files,
 				)
 			);
 			$post_id = $planned['post_id'];
@@ -2546,7 +2556,10 @@ class Push_MD_Plugin {
 			$applied = self::upsert_post_from_markdown(
 				$plan['path'],
 				$plan['content'],
-				array( 'skip_modified_check' => $skip_modified_checks )
+				array(
+					'skip_modified_check' => $skip_modified_checks,
+					'commit_files'        => $new_files,
+				)
 			);
 			if ( $applied['post_id'] ) {
 				$changes[] = $applied['change'];
@@ -2813,11 +2826,18 @@ class Push_MD_Plugin {
 			self::assert_can_create_post_type( $post_type );
 		}
 
+		$commit_files = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		$post_markup  = Push_MD_Media::rewrite_inline_image_paths(
+			$existing_post ? $existing_post->ID : 0,
+			$result->get_block_markup(),
+			$commit_files
+		);
+
 		$postarr = array(
 			'post_type'    => $post_type,
 			'post_title'   => isset( $metadata['title'] ) ? $metadata['title'] : ucwords( str_replace( '-', ' ', $slug ) ),
 			'post_status'  => $post_status,
-			'post_content' => $result->get_block_markup(),
+			'post_content' => $post_markup,
 		);
 		if ( isset( $metadata['slug'] ) && '' !== trim( (string) $metadata['slug'] ) ) {
 			$requested_slug = sanitize_title( $metadata['slug'] );
@@ -2931,7 +2951,7 @@ class Push_MD_Plugin {
 			self::assign_post_tags( $post_id, $metadata['tags'] );
 		}
 		if ( isset( $metadata['featured_image'] ) ) {
-			self::assign_post_featured_image( $post_id, $metadata['featured_image'] );
+			self::assign_post_featured_image( $post_id, $metadata['featured_image'], $options );
 		}
 
 		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
@@ -5966,13 +5986,9 @@ class Push_MD_Plugin {
 		wp_set_post_tags( $post_id, $tag_list, false );
 	}
 
-	private static function assign_post_featured_image( $post_id, $img_val ) {
-		$img_id = self::resolve_featured_image_id( $img_val );
-		if ( $img_id > 0 ) {
-			set_post_thumbnail( $post_id, $img_id );
-		} else {
-			delete_post_thumbnail( $post_id );
-		}
+	private static function assign_post_featured_image( $post_id, $img_val, $options = array() ) {
+		$commit_files = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		Push_MD_Media::handle_featured_image( $post_id, $img_val, $commit_files );
 	}
 
 	private static function is_yoast_seo_active() {
