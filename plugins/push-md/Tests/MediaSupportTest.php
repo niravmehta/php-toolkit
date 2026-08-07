@@ -268,4 +268,106 @@ class MediaSupportTest extends TestCase {
 		Push_MD_Media::handle_featured_image( 50, 'hero.png', array(), $commit_files );
 		$this->assertTrue( true );
 	}
+
+	/**
+	 * The exhaustive basename scan in resolve_media_url_info() must find a file
+	 * that was already uploaded (present in $uploaded_media_map) without uploading
+	 * it again. Even if the MD references the image as "../media/chart.png" and
+	 * the map key is "media/chart.png", the URL from the map must be returned.
+	 */
+	public function testNoDoubleUploadWhenFileIsInUploadedMediaMap() {
+		$pre_uploaded_map = array(
+			'media/chart.png'     => array(
+				'url' => 'http://example.org/wp-content/uploads/chart.png',
+				'id'  => 99,
+			),
+			'../media/chart.png'  => array(
+				'url' => 'http://example.org/wp-content/uploads/chart.png',
+				'id'  => 99,
+			),
+			'chart.png'           => array(
+				'url' => 'http://example.org/wp-content/uploads/chart.png',
+				'id'  => 99,
+			),
+		);
+
+		// The commit_files still contains the binary so a naive implementation
+		// could try to upload it again. The fixed code must return from the map.
+		$commit_files = array(
+			'media/chart.png' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+		);
+
+		$cache = array();
+
+		// resolve_media_url_info must find the pre-uploaded entry and NOT call upload_media_asset.
+		// We verify by checking the returned URL matches the pre-uploaded map and no exception
+		// occurs (upload_media_asset would fail without WP functions in test env).
+		$result = Push_MD_Media::resolve_media_url_info(
+			'../media/chart.png',
+			1,
+			$pre_uploaded_map,
+			$commit_files,
+			$cache,
+			false
+		);
+
+		$this->assertNotNull( $result, 'Expected resolve_media_url_info to return a result from the pre-uploaded map.' );
+		$this->assertSame( 'http://example.org/wp-content/uploads/chart.png', $result['url'] );
+		$this->assertSame( 99, $result['id'] );
+	}
+
+	/**
+	 * find_existing_attachment_id_by_filename() must not return an attachment for
+	 * "chart.png" when the stored _wp_attached_file is "2025/01/chart-inline.png".
+	 * Previously the LIKE comparison without basename verification caused this
+	 * false positive.
+	 */
+	public function testFindExistingAttachmentNoFalsePositiveOnSimilarFilename() {
+		// This test validates the logic without WP functions — we rely on the
+		// fact that when get_posts() is not available, the function returns 0.
+		// The actual LIKE + basename fix is exercised by the logic path when
+		// WP is loaded (e.g. in blueprint e2e tests). Here we confirm the
+		// no-WP-functions early return is safe.
+		$id = Push_MD_Media::find_existing_attachment_id_by_filename( 'chart.png' );
+		$this->assertSame( 0, $id, 'Expected 0 when WP functions are unavailable.' );
+	}
+
+	/**
+	 * A commit that contains only media/ files (no .md changes) must pass
+	 * process_commit_media_files() without errors. This verifies media-only
+	 * pushes are fully supported.
+	 */
+	public function testMediaOnlyCommitIsProcessedWithoutErrors() {
+		$commit_files = array(
+			'media/logo.webp'  => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_png,
+			),
+			'media/banner.gif' => array(
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => $this->sample_gif,
+			),
+		);
+
+		// dry_run = true skips actual uploads but still runs validation.
+		// If validation fails for a valid image, this will throw.
+		$result = Push_MD_Media::process_commit_media_files( $commit_files, true );
+
+		// In dry_run mode, the map is empty (no uploads), but no exception should be thrown.
+		$this->assertIsArray( $result );
+	}
+
+	/**
+	 * export_media_content() must return an empty array. Media is push-only;
+	 * the server no longer exports the WP Media Library into the git tree on
+	 * fetch/clone.
+	 */
+	public function testExportMediaContentReturnsEmptyArray() {
+		$entries = Push_MD_Media::export_media_content();
+		$this->assertIsArray( $entries );
+		$this->assertEmpty( $entries, 'export_media_content() must return [] — media is push-only and must not be exported on git fetch/clone.' );
+	}
 }

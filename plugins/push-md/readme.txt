@@ -47,6 +47,7 @@ A checkout can include:
 * `wp_template/{slug}.html` and `wp_template/{theme}/{slug}.html` for templates.
 * `wp_template_part/{theme}/{slug}.html` for template parts.
 * `wp_navigation/{slug}.html` for navigation posts.
+* `media/` as a push-only staging directory for image assets (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`).
 * `categories.md`, `tags.md`, and `authors.md` as master reference files for site taxonomy and authors.
 * `wp_theme/{theme}/theme.json` as read-only context.
 * `wp_global_styles/{theme}.json` for editable Global Styles overlays.
@@ -135,9 +136,11 @@ No. Push MD makes WordPress itself behave like a Git remote for supported conten
 
 No. The checkout is scoped to supported WordPress content. Theme-provided files such as `wp_theme/{theme}/theme.json` may appear as read-only context, but Push MD does not deploy theme or plugin code.
 
-= Does Push MD export media files? =
+= How are media files handled? =
 
-No. Media mirroring is planned future work. The current release does not mirror uploads or import attachment binaries.
+Image assets placed in the `media/` directory (e.g. `media/cover.png` or `../media/cover.png` referenced in Markdown or Gutenberg blocks) are uploaded to the WordPress Media Library on `git push`. If an image with the same filename already exists, Push MD overwrites the file on disk and updates its attachment metadata in place (upsert behaviour), preventing duplicate auto-numbered media library entries (`cover-1.png`).
+
+To avoid repository bloat and keep checkouts lightweight, the `media/` directory operates as a push-only staging area. Uploaded images are ingested into WordPress and automatically cleaned up from local working trees on the next `git pull` while preserving the `media/` folder.
 
 = Does Push MD send site content to another service? =
 
