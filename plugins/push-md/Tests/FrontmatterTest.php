@@ -885,7 +885,7 @@ MD;
 			'seo_description' => 'New SEO Description',
 			'seo_keywords'    => array( 'Primary KW', 'Secondary KW' ),
 		);
-		$this->invoke_private( 'handle_seo_import_frontmatter', array( 101, $metadata, array(), null ) );
+		Push_MD_SEO::import_frontmatter( 101, $metadata );
 
 		$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_title'] );
 		$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['rank_math_title'] );
@@ -911,7 +911,7 @@ MD;
 		$metadata = array(
 			'seo_keywords' => 'marketing, optimization',
 		);
-		$this->invoke_private( 'handle_seo_import_frontmatter', array( 303, $metadata, array(), null ) );
+		Push_MD_SEO::import_frontmatter( 303, $metadata );
 		$this->assertEquals( 'marketing, optimization', $GLOBALS['mock_post_meta'][303]['rank_math_focus_keyword'] );
 
 		$normalized = $this->invoke_private( 'normalize_supported_frontmatter', array( array( 'seo_keywords' => array( 'Workflow' ) ), array( 'seo_keywords' ) ) );
