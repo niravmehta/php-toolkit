@@ -98,6 +98,9 @@ class Push_MD_Plugin {
 		if ( class_exists( 'Push_MD_Pull_Requests' ) ) {
 			Push_MD_Pull_Requests::bootstrap();
 		}
+		if ( class_exists( 'Push_MD_Draft_Previews' ) ) {
+			Push_MD_Draft_Previews::bootstrap();
+		}
 	}
 
 	public static function on_activation() {
@@ -2086,12 +2089,22 @@ class Push_MD_Plugin {
 			return self::export_global_styles_to_json( $post );
 		}
 
+		$export_status  = $post->post_status;
+		$export_content = $post->post_content;
+		if ( class_exists( 'Push_MD_Draft_Previews' ) ) {
+			$preview_revision = Push_MD_Draft_Previews::find_preview_revision( $post->ID );
+			if ( $preview_revision instanceof WP_Post ) {
+				$export_status  = 'draft';
+				$export_content = $preview_revision->post_content;
+			}
+		}
+
 		$metadata = array(
 			'id'     => array( (string) $post->ID ),
 			'title'  => array( $post->post_title ),
 			'slug'   => array( $post->post_name ),
 			'date'   => array( self::format_post_date_for_frontmatter( $post ) ),
-			'status' => array( self::frontmatter_status_from_post_status( $post->post_status ) ),
+			'status' => array( self::frontmatter_status_from_post_status( $export_status ) ),
 		);
 
 		$last_modified = self::format_post_modified_date_for_frontmatter( $post );
@@ -2148,7 +2161,7 @@ class Push_MD_Plugin {
 
 		$producer = new Push_MD_Markdown_Producer(
 			new BlocksWithMetadata(
-				$post->post_content,
+				$export_content,
 				$metadata
 			)
 		);
@@ -2825,6 +2838,28 @@ class Push_MD_Plugin {
 		self::assert_can_set_post_status( $post_type, $post_status, $existing_post );
 		$post_parent = 'page' === $post_type ? self::path_to_page_parent_id( $path, false ) : 0;
 
+		if ( 'discard' === $post_status ) {
+			if ( ! $existing_post ) {
+				throw new Exception( 'Push rejected because status: discard requires an existing post.' );
+			}
+
+			if ( ! empty( $options['dry_run'] ) ) {
+				return array(
+					'post_id' => $existing_post->ID,
+					'change'  => null,
+				);
+			}
+
+			if ( class_exists( 'Push_MD_Draft_Previews' ) ) {
+				Push_MD_Draft_Previews::cleanup_preview( $existing_post->ID );
+			}
+
+			return array(
+				'post_id' => $existing_post->ID,
+				'change'  => self::build_push_summary_item( 'discarded_preview', $existing_post, $path ),
+			);
+		}
+
 		if (
 			$existing_post &&
 			empty( $options['skip_modified_check'] ) &&
@@ -2850,6 +2885,26 @@ class Push_MD_Plugin {
 			$commit_files,
 			$dry_run
 		);
+
+		if ( Push_MD_Draft_Previews::is_draft_preview_for_published_post( $existing_post, $post_status ) ) {
+			if ( $dry_run ) {
+				return array(
+					'post_id' => $existing_post->ID,
+					'change'  => null,
+				);
+			}
+
+			$preview_res = Push_MD_Draft_Previews::create_or_update_preview_revision( $existing_post->ID, $post_markup );
+			$token_res   = Push_MD_Draft_Previews::generate_or_refresh_preview_token( $existing_post->ID, $preview_res['revision_id'] );
+
+			$change_item                = self::build_push_summary_item( 'draft_preview', $existing_post, $path );
+			$change_item['preview_url'] = $token_res['url'];
+
+			return array(
+				'post_id' => $existing_post->ID,
+				'change'  => $change_item,
+			);
+		}
 
 		$postarr = array(
 			'post_type'    => $post_type,
@@ -2983,6 +3038,10 @@ class Push_MD_Plugin {
 		}
 
 		do_action( 'push_md_import_frontmatter', $post_id, $metadata, $postarr, $existing_post );
+
+		if ( 'publish' === $post_status && class_exists( 'Push_MD_Draft_Previews' ) ) {
+			Push_MD_Draft_Previews::cleanup_preview( $post_id );
+		}
 
 		$post = get_post( $post_id );
 
@@ -3398,12 +3457,31 @@ class Push_MD_Plugin {
 		);
 
 		foreach ( $push_summary as $change ) {
-			$messages[] = sprintf(
-				'- %s %s: %s',
-				ucfirst( $change['action'] ),
-				$change['post_type'],
-				self::sanitize_push_summary_text( $change['url'] ? $change['url'] : $change['path'] )
-			);
+			if ( 'draft_preview' === $change['action'] ) {
+				$preview_url = ! empty( $change['preview_url'] ) ? $change['preview_url'] : $change['url'];
+				$messages[]  = sprintf(
+					'- Updated draft preview revision for %s %s',
+					$change['post_type'],
+					self::sanitize_push_summary_text( $change['path'] )
+				);
+				$messages[]  = sprintf(
+					'  Preview URL: %s',
+					self::sanitize_push_summary_text( $preview_url )
+				);
+			} elseif ( 'discarded_preview' === $change['action'] ) {
+				$messages[] = sprintf(
+					'- Discarded draft preview for %s %s (reverted to live version)',
+					$change['post_type'],
+					self::sanitize_push_summary_text( $change['path'] )
+				);
+			} else {
+				$messages[] = sprintf(
+					'- %s %s: %s',
+					ucfirst( $change['action'] ),
+					$change['post_type'],
+					self::sanitize_push_summary_text( $change['url'] ? $change['url'] : $change['path'] )
+				);
+			}
 		}
 
 		return $messages;
@@ -4165,6 +4243,8 @@ class Push_MD_Plugin {
 			'draft'     => 'draft',
 			'pending'   => 'pending',
 			'private'   => 'private',
+			'discard'   => 'discard',
+			'reset'     => 'discard',
 		);
 		$key      = strtolower( trim( $post_status ) );
 
@@ -4842,7 +4922,7 @@ class Push_MD_Plugin {
 	}
 
 	private static function validate_post_status( $post_status, $post_type ) {
-		if ( in_array( $post_status, self::$supported_post_statuses, true ) ) {
+		if ( 'discard' === $post_status || in_array( $post_status, self::$supported_post_statuses, true ) ) {
 			return;
 		}
 
