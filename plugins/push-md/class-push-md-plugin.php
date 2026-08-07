@@ -1593,6 +1593,17 @@ class Push_MD_Plugin {
 			$files[ $m_path ] = $m_entry;
 		}
 
+		// Always keep a placeholder so the media/ staging directory exists in the
+		// repository tree even after all uploaded images have been cleaned up.
+		// Without this, git would delete the empty directory on git pull.
+		if ( ! isset( $files['media/.gitkeep'] ) ) {
+			$files['media/.gitkeep'] = array(
+				'post'    => null,
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => '',
+			);
+		}
+
 		if ( $has_guideline_skills ) {
 			foreach ( self::get_agent_skills_directory_symlink_paths() as $symlink_path => $target ) {
 				$files[ $symlink_path ] = array(

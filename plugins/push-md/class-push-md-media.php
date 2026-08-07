@@ -116,6 +116,14 @@ class Push_MD_Media {
 				continue;
 			}
 
+			// Skip non-image files inside media/ (e.g. media/.gitkeep or any future
+			// placeholder) without error. Only files with allowed image extensions are
+			// uploaded to the WordPress Media Library.
+			$extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
+			if ( '' === $extension || ! in_array( $extension, self::$allowed_extensions, true ) ) {
+				continue;
+			}
+
 			// Fail-closed validation for all media files in commit.
 			self::validate_media_file( $path, isset( $entry['content'] ) ? $entry['content'] : '' );
 
@@ -185,8 +193,14 @@ class Push_MD_Media {
 	/**
 	 * Upload a media binary file to WordPress Uploads and create attachment.
 	 *
-	 * @param string $rel_path    Relative path in repo (e.g. media/chart.png).
-	 * @param string $binary_data Binary image data.
+	 * If a file with the same filename already exists in the Media Library,
+	 * it is overwritten in place (upsert behaviour) rather than creating a
+	 * duplicate with an auto-numbered suffix (filename-1.webp, etc.).
+	 * The existing attachment ID and URL are preserved, so all posts that
+	 * reference the image continue to work without any content updates.
+	 *
+	 * @param string $rel_path       Relative path in repo (e.g. media/chart.png).
+	 * @param string $binary_data    Binary image data.
 	 * @param int    $parent_post_id Parent post ID to attach to (optional).
 	 * @return array Array with 'attachment_id' and 'url'.
 	 * @throws Exception On upload failure.
@@ -195,6 +209,37 @@ class Push_MD_Media {
 		self::validate_media_file( $rel_path, $binary_data );
 
 		$filename = basename( $rel_path );
+
+		// Upsert: if an attachment with this exact filename already exists,
+		// overwrite the file on disk and update its metadata instead of
+		// creating a new attachment with an auto-numbered suffix.
+		$existing_id = self::find_existing_attachment_id_by_filename( $filename );
+		if ( $existing_id > 0 && function_exists( 'get_attached_file' ) && function_exists( 'wp_get_attachment_url' ) ) {
+			$existing_path = get_attached_file( $existing_id );
+			$existing_url  = wp_get_attachment_url( $existing_id );
+			if ( $existing_path && $existing_url ) {
+				// Overwrite the file on disk.
+				$bytes_written = file_put_contents( $existing_path, $binary_data ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
+				if ( false !== $bytes_written ) {
+					// Regenerate image metadata (dimensions, thumbnails, etc.).
+					if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
+						if ( file_exists( ABSPATH . 'wp-admin/includes/image.php' ) ) {
+							require_once ABSPATH . 'wp-admin/includes/image.php';
+						}
+						$attach_data = wp_generate_attachment_metadata( $existing_id, $existing_path );
+						wp_update_attachment_metadata( $existing_id, $attach_data );
+					}
+					return array(
+						'attachment_id' => (int) $existing_id,
+						'url'           => $existing_url,
+					);
+				}
+			}
+		}
+
+		// No existing attachment — create a new one.
+		$file_path = '';
+		$url       = '';
 
 		// Use wp_upload_bits to save file.
 		if ( function_exists( 'wp_upload_bits' ) ) {
@@ -212,7 +257,7 @@ class Push_MD_Media {
 				'url'  => 'http://example.org/wp-content/uploads',
 			);
 			$file_path  = rtrim( $upload_dir['path'], '/' ) . '/' . $filename;
-			file_put_contents( $file_path, $binary_data );
+			file_put_contents( $file_path, $binary_data ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
 			$url = rtrim( $upload_dir['url'], '/' ) . '/' . $filename;
 		}
 
@@ -236,7 +281,9 @@ class Push_MD_Media {
 			$attachment_id = wp_insert_attachment( $attachment, $file_path, $parent_post_id );
 			if ( ! is_wp_error( $attachment_id ) && $attachment_id > 0 ) {
 				if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
-					require_once ABSPATH . 'wp-admin/includes/image.php';
+					if ( file_exists( ABSPATH . 'wp-admin/includes/image.php' ) ) {
+						require_once ABSPATH . 'wp-admin/includes/image.php';
+					}
 					$attach_data = wp_generate_attachment_metadata( $attachment_id, $file_path );
 					wp_update_attachment_metadata( $attachment_id, $attach_data );
 				}
@@ -312,7 +359,22 @@ class Push_MD_Media {
 			return $uploaded_cache[ $clean_path ];
 		}
 
-		$fn           = basename( $clean_path );
+		$fn = basename( $clean_path );
+
+		// Before falling through to upload from commit payload, do a final exhaustive
+		// basename scan of the already-uploaded map. This prevents double-uploads when
+		// process_commit_media_files() has already handled this file but stored it
+		// under a key that didn't match the earlier lookups (e.g. path normalisation
+		// differences between how the MD references the image and how it was stored).
+		if ( is_array( $uploaded_media_map ) ) {
+			foreach ( $uploaded_media_map as $map_key => $map_info ) {
+				if ( is_array( $map_info ) && isset( $map_info['url'] ) && basename( $map_key ) === $fn ) {
+					$uploaded_cache[ $clean_path ] = $map_info;
+					return $map_info;
+				}
+			}
+		}
+
 		$file_payload = null;
 		$target_path  = $clean_path;
 
@@ -706,11 +768,14 @@ class Push_MD_Media {
 			return 0;
 		}
 
+		// LIKE is used so the DB can match paths like "2025/01/chart.png", but we
+		// then verify the basename exactly to avoid false positives such as
+		// "chart-inline.png" matching a search for "chart.png".
 		$attachments = get_posts(
 			array(
 				'post_type'      => 'attachment',
 				'post_status'    => 'inherit',
-				'posts_per_page' => 1,
+				'posts_per_page' => -1,
 				'meta_query'     => array(
 					array(
 						'key'     => '_wp_attached_file',
@@ -721,30 +786,42 @@ class Push_MD_Media {
 			)
 		);
 
-		if ( ! empty( $attachments ) && isset( $attachments[0]->ID ) ) {
-			return (int) $attachments[0]->ID;
+		foreach ( $attachments as $att ) {
+			$attached_file = function_exists( 'get_post_meta' ) ? get_post_meta( $att->ID, '_wp_attached_file', true ) : '';
+			if ( basename( (string) $attached_file ) === $filename ) {
+				return (int) $att->ID;
+			}
 		}
 
+		// Fallback: search by sanitized slug (handles cases where WP sanitized the
+		// filename on upload, e.g. "My Photo.png" → "my-photo.png").
 		$slug = pathinfo( $filename, PATHINFO_FILENAME );
 		if ( '' !== $slug ) {
 			$clean_slug = function_exists( 'sanitize_title' ) ? sanitize_title( $slug ) : $slug;
-			$by_slug    = get_posts(
-				array(
-					'post_type'      => 'attachment',
-					'post_status'    => 'inherit',
-					'posts_per_page' => 1,
-					'meta_query'     => array(
-						array(
-							'key'     => '_wp_attached_file',
-							'value'   => $clean_slug,
-							'compare' => 'LIKE',
+			if ( $clean_slug !== $slug ) {
+				$extension  = pathinfo( $filename, PATHINFO_EXTENSION );
+				$clean_name = '' !== $extension ? $clean_slug . '.' . $extension : $clean_slug;
+				$by_slug    = get_posts(
+					array(
+						'post_type'      => 'attachment',
+						'post_status'    => 'inherit',
+						'posts_per_page' => -1,
+						'meta_query'     => array(
+							array(
+								'key'     => '_wp_attached_file',
+								'value'   => $clean_slug,
+								'compare' => 'LIKE',
+							),
 						),
-					),
-				)
-			);
+					)
+				);
 
-			if ( ! empty( $by_slug ) && isset( $by_slug[0]->ID ) ) {
-				return (int) $by_slug[0]->ID;
+				foreach ( $by_slug as $att ) {
+					$attached_file = function_exists( 'get_post_meta' ) ? get_post_meta( $att->ID, '_wp_attached_file', true ) : '';
+					if ( basename( (string) $attached_file ) === $clean_name ) {
+						return (int) $att->ID;
+					}
+				}
 			}
 		}
 
@@ -770,44 +847,18 @@ class Push_MD_Media {
 	/**
 	 * Export media library image attachments to media/ entries for Git export/pull.
 	 *
-	 * @return array Array of Git tree entries ($path => array('mode' => ..., 'content' => ...)).
+	 * The media/ directory in the repository is intentionally push-only: files
+	 * committed to media/ are uploaded to the WordPress Media Library on push and
+	 * then auto-deleted from the repository tree by a server-side follow-up commit.
+	 * This keeps the local checkout lean (no binary blobs accumulating over time)
+	 * and avoids re-exporting the entire media library on every git clone/fetch.
+	 *
+	 * This method is retained for optional use (e.g. a future opt-in export flag)
+	 * but is no longer called during normal repository sync.
+	 *
+	 * @return array Always returns an empty array. Media is not exported to git.
 	 */
 	public static function export_media_content() {
-		$entries = array();
-
-		if ( ! function_exists( 'get_posts' ) ) {
-			return $entries;
-		}
-
-		$attachments = get_posts(
-			array(
-				'post_type'      => 'attachment',
-				'post_status'    => 'inherit',
-				'posts_per_page' => -1,
-				'post_mime_type' => 'image',
-			)
-		);
-
-		foreach ( $attachments as $attachment ) {
-			$file_path = get_attached_file( $attachment->ID );
-			if ( ! $file_path || ! file_exists( $file_path ) ) {
-				continue;
-			}
-
-			$filename   = basename( $file_path );
-			$media_path = 'media/' . $filename;
-
-			$content = file_get_contents( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
-			if ( false === $content ) {
-				continue;
-			}
-
-			$entries[ $media_path ] = array(
-				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-				'content' => $content,
-			);
-		}
-
-		return $entries;
+		return array();
 	}
 }
