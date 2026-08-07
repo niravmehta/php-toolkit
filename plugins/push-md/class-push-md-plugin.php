@@ -1588,6 +1588,22 @@ class Push_MD_Plugin {
 		self::add_master_taxonomy_and_author_files( $files );
 		self::add_gitignore_file( $files );
 
+		$media_files = Push_MD_Media::export_media_content();
+		foreach ( $media_files as $m_path => $m_entry ) {
+			$files[ $m_path ] = $m_entry;
+		}
+
+		// Always keep a placeholder so the media/ staging directory exists in the
+		// repository tree even after all uploaded images have been cleaned up.
+		// Without this, git would delete the empty directory on git pull.
+		if ( ! isset( $files['media/.gitkeep'] ) ) {
+			$files['media/.gitkeep'] = array(
+				'post'    => null,
+				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
+				'content' => '',
+			);
+		}
+
 		if ( $has_guideline_skills ) {
 			foreach ( self::get_agent_skills_directory_symlink_paths() as $symlink_path => $target ) {
 				$files[ $symlink_path ] = array(
@@ -2480,11 +2496,16 @@ class Push_MD_Plugin {
 			}
 		}
 
+		$uploaded_media_map = Push_MD_Media::process_commit_media_files( $new_files, $dry_run );
+
 		foreach ( $new_files as $path => $entry ) {
 			if ( isset( $old_files[ $path ] ) && self::repository_entries_match( $old_files[ $path ], $entry ) ) {
 				continue;
 			}
 			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
+				continue;
+			}
+			if ( Push_MD_Media::is_media_path( $path ) ) {
 				continue;
 			}
 
@@ -2494,6 +2515,8 @@ class Push_MD_Plugin {
 				array(
 					'dry_run'             => true,
 					'skip_modified_check' => $skip_modified_checks,
+					'commit_files'        => $new_files,
+					'uploaded_media_map' => $uploaded_media_map,
 				)
 			);
 			$post_id = $planned['post_id'];
@@ -2546,7 +2569,11 @@ class Push_MD_Plugin {
 			$applied = self::upsert_post_from_markdown(
 				$plan['path'],
 				$plan['content'],
-				array( 'skip_modified_check' => $skip_modified_checks )
+				array(
+					'skip_modified_check' => $skip_modified_checks,
+					'commit_files'        => $new_files,
+					'uploaded_media_map' => $uploaded_media_map,
+				)
 			);
 			if ( $applied['post_id'] ) {
 				$changes[] = $applied['change'];
@@ -2783,7 +2810,7 @@ class Push_MD_Plugin {
 				$post_type
 			)
 		);
-		self::validate_post_frontmatter_references( $metadata, $post_type );
+		self::validate_post_frontmatter_references( $metadata, $post_type, $options );
 
 		$post_id       = self::find_post_id_by_path_metadata( $path, $metadata );
 		$existing_post = $post_id ? get_post( $post_id ) : null;
@@ -2813,11 +2840,22 @@ class Push_MD_Plugin {
 			self::assert_can_create_post_type( $post_type );
 		}
 
+		$dry_run            = ! empty( $options['dry_run'] );
+		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+		$post_markup        = Push_MD_Media::rewrite_inline_image_paths(
+			$existing_post ? $existing_post->ID : 0,
+			$result->get_block_markup(),
+			$uploaded_media_map,
+			$commit_files,
+			$dry_run
+		);
+
 		$postarr = array(
 			'post_type'    => $post_type,
 			'post_title'   => isset( $metadata['title'] ) ? $metadata['title'] : ucwords( str_replace( '-', ' ', $slug ) ),
 			'post_status'  => $post_status,
-			'post_content' => $result->get_block_markup(),
+			'post_content' => $post_markup,
 		);
 		if ( isset( $metadata['slug'] ) && '' !== trim( (string) $metadata['slug'] ) ) {
 			$requested_slug = sanitize_title( $metadata['slug'] );
@@ -2931,7 +2969,7 @@ class Push_MD_Plugin {
 			self::assign_post_tags( $post_id, $metadata['tags'] );
 		}
 		if ( isset( $metadata['featured_image'] ) ) {
-			self::assign_post_featured_image( $post_id, $metadata['featured_image'] );
+			self::assign_post_featured_image( $post_id, $metadata['featured_image'], $options );
 		}
 
 		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
@@ -5161,6 +5199,11 @@ class Push_MD_Plugin {
 		}
 
 		$rules[] = '';
+		$rules[] = '# Media assets';
+		$rules[] = '!media/';
+		$rules[] = '!media/**';
+
+		$rules[] = '';
 		$rules[] = '# Read-only theme context';
 		$rules[] = '!wp_theme/';
 		$rules[] = '!wp_theme/**/*.json';
@@ -5754,7 +5797,7 @@ class Push_MD_Plugin {
 		return $val;
 	}
 
-	private static function validate_post_frontmatter_references( $metadata, $post_type ) {
+	private static function validate_post_frontmatter_references( $metadata, $post_type, $options = array() ) {
 		unset( $post_type );
 
 		if ( isset( $metadata['author'] ) && '' !== trim( (string) $metadata['author'] ) ) {
@@ -5791,7 +5834,7 @@ class Push_MD_Plugin {
 		}
 
 		if ( isset( $metadata['featured_image'] ) && '' !== trim( (string) $metadata['featured_image'] ) ) {
-			$img_id = self::resolve_featured_image_id( $metadata['featured_image'] );
+			$img_id = self::resolve_featured_image_id( $metadata['featured_image'], $options );
 			if ( 0 === $img_id ) {
 				throw new Exception( sprintf( 'Push rejected because featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ) );
 			}
@@ -5907,20 +5950,52 @@ class Push_MD_Plugin {
 		return ( $user && ! is_wp_error( $user ) ) ? $user->ID : 0;
 	}
 
-	private static function resolve_featured_image_id( $img_val ) {
+	private static function resolve_featured_image_id( $img_val, $options = array() ) {
 		$img_val = trim( (string) $img_val );
 		if ( '' === $img_val ) {
 			return 0;
 		}
 
 		if ( is_numeric( $img_val ) ) {
-			$post = get_post( (int) $img_val );
+			$post = function_exists( 'get_post' ) ? get_post( (int) $img_val ) : null;
 			return ( $post && 'attachment' === $post->post_type ) ? (int) $img_val : 0;
 		}
 
-		$attachment_id = attachment_url_to_postid( $img_val );
-		if ( $attachment_id ) {
-			return $attachment_id;
+		if ( function_exists( 'attachment_url_to_postid' ) ) {
+			$attachment_id = attachment_url_to_postid( $img_val );
+			if ( $attachment_id ) {
+				return $attachment_id;
+			}
+		}
+
+		$clean_path = Push_MD_Media::normalize_relative_media_path( $img_val );
+		if ( '' !== $clean_path && Push_MD_Media::is_media_path( $clean_path ) ) {
+			$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+			$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+
+			if ( is_array( $uploaded_media_map ) && isset( $uploaded_media_map[ $clean_path ]['id'] ) && $uploaded_media_map[ $clean_path ]['id'] > 0 ) {
+				return (int) $uploaded_media_map[ $clean_path ]['id'];
+			}
+
+			$fn = basename( $clean_path );
+			if ( isset( $commit_files[ $clean_path ] ) || isset( $commit_files[ 'media/' . $fn ] ) || isset( $commit_files[ $fn ] ) ) {
+				return -1;
+			}
+
+			foreach ( array_keys( $commit_files ) as $c_path ) {
+				if ( basename( $c_path ) === $fn ) {
+					return -1;
+				}
+			}
+
+			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( $fn );
+			if ( $existing_id > 0 ) {
+				return $existing_id;
+			}
+		}
+
+		if ( 0 === strpos( $img_val, 'http://' ) || 0 === strpos( $img_val, 'https://' ) || 0 === strpos( $img_val, '//' ) ) {
+			return -1;
 		}
 
 		return 0;
@@ -5966,13 +6041,11 @@ class Push_MD_Plugin {
 		wp_set_post_tags( $post_id, $tag_list, false );
 	}
 
-	private static function assign_post_featured_image( $post_id, $img_val ) {
-		$img_id = self::resolve_featured_image_id( $img_val );
-		if ( $img_id > 0 ) {
-			set_post_thumbnail( $post_id, $img_id );
-		} else {
-			delete_post_thumbnail( $post_id );
-		}
+	private static function assign_post_featured_image( $post_id, $img_val, $options = array() ) {
+		$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
+		$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
+		$dry_run            = ! empty( $options['dry_run'] );
+		Push_MD_Media::handle_featured_image( $post_id, $img_val, $uploaded_media_map, $commit_files, $dry_run );
 	}
 
 	private static function is_yoast_seo_active() {
