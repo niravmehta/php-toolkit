@@ -26,6 +26,8 @@ class Push_MD_SEO {
 		'og_image',
 		'canonical',
 		'schema_type',
+		'seo_cluster',
+		'seo_is_pillar',
 	);
 
 	/**
@@ -131,6 +133,17 @@ class Push_MD_SEO {
 			$metadata['schema_type'] = array( $schema_type );
 		}
 
+		// 9. SEO Cluster
+		$seo_cluster = self::get_post_seo_cluster( $post_id );
+		if ( '' !== $seo_cluster ) {
+			$metadata['seo_cluster'] = array( $seo_cluster );
+		}
+
+		// 10. SEO Pillar
+		if ( self::get_post_is_pillar( $post_id ) ) {
+			$metadata['seo_is_pillar'] = array( 'true' );
+		}
+
 		return $metadata;
 	}
 
@@ -189,6 +202,16 @@ class Push_MD_SEO {
 		if ( isset( $metadata['schema_type'] ) ) {
 			$post_type = function_exists( 'get_post_type' ) ? get_post_type( $post_id ) : 'post';
 			self::update_post_schema_type_meta( $post_id, $metadata['schema_type'], $post_type ? $post_type : 'post' );
+		}
+
+		// 9. SEO Cluster
+		if ( isset( $metadata['seo_cluster'] ) ) {
+			self::update_post_seo_cluster( $post_id, $metadata['seo_cluster'] );
+		}
+
+		// 10. SEO Pillar
+		if ( isset( $metadata['seo_is_pillar'] ) ) {
+			self::update_post_is_pillar( $post_id, $metadata['seo_is_pillar'] );
 		}
 	}
 
@@ -673,7 +696,7 @@ class Push_MD_SEO {
 				);
 			}
 
-			$json_val = ! empty( $yoast_additional ) ? wp_json_encode( $yoast_additional, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) : '[]';
+			$json_val = ! empty( $yoast_additional ) ? ( function_exists( 'wp_json_encode' ) ? wp_json_encode( $yoast_additional, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) : json_encode( $yoast_additional, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) ) : '[]';
 			update_post_meta( $post_id, '_yoast_wpseo_focuskeywords', $json_val );
 		}
 	}
@@ -703,5 +726,150 @@ class Push_MD_SEO {
 		}
 
 		return $keywords;
+	}
+
+	/**
+	 * Get SEO cluster taxonomy term name or post meta value.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string Cluster name or empty string.
+	 */
+	public static function get_post_seo_cluster( $post_id ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return '';
+		}
+
+		if ( function_exists( 'taxonomy_exists' ) && taxonomy_exists( 'seo_cluster' ) && function_exists( 'get_the_terms' ) ) {
+			$terms = get_the_terms( $post_id, 'seo_cluster' );
+			if ( is_array( $terms ) && ! empty( $terms ) ) {
+				$first = reset( $terms );
+				if ( is_object( $first ) && ! empty( $first->name ) ) {
+					return trim( (string) $first->name );
+				}
+			}
+		}
+
+		if ( function_exists( 'get_post_meta' ) ) {
+			$meta_val = get_post_meta( $post_id, '_pushmd_seo_cluster', true );
+			if ( '' !== trim( (string) $meta_val ) ) {
+				return trim( (string) $meta_val );
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Update SEO cluster taxonomy term and post meta.
+	 *
+	 * @param int          $post_id Post ID.
+	 * @param string|array $val     Cluster value from frontmatter.
+	 */
+	public static function update_post_seo_cluster( $post_id, $val ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 ) {
+			return;
+		}
+
+		$cluster_name = is_array( $val ) ? reset( $val ) : $val;
+		$cluster_name = trim( (string) $cluster_name );
+
+		if ( function_exists( 'update_post_meta' ) ) {
+			update_post_meta( $post_id, '_pushmd_seo_cluster', $cluster_name );
+		}
+
+		if ( function_exists( 'taxonomy_exists' ) && taxonomy_exists( 'seo_cluster' ) ) {
+			if ( '' === $cluster_name ) {
+				if ( function_exists( 'wp_set_object_terms' ) ) {
+					wp_set_object_terms( $post_id, array(), 'seo_cluster' );
+				}
+				return;
+			}
+
+			$term = false;
+			if ( function_exists( 'get_term_by' ) ) {
+				$slug = function_exists( 'sanitize_title' ) ? sanitize_title( $cluster_name ) : strtolower( str_replace( ' ', '-', $cluster_name ) );
+				$term = get_term_by( 'slug', $slug, 'seo_cluster' );
+				if ( ! $term || is_wp_error( $term ) ) {
+					$term = get_term_by( 'name', $cluster_name, 'seo_cluster' );
+				}
+			}
+
+			if ( $term && ! is_wp_error( $term ) && function_exists( 'wp_set_object_terms' ) ) {
+				wp_set_object_terms( $post_id, intval( $term->term_id ), 'seo_cluster' );
+			} elseif ( ( ! $term || is_wp_error( $term ) ) && function_exists( 'wp_insert_term' ) ) {
+				$created = wp_insert_term( $cluster_name, 'seo_cluster' );
+				if ( is_array( $created ) && ! empty( $created['term_id'] ) && function_exists( 'wp_set_object_terms' ) ) {
+					wp_set_object_terms( $post_id, intval( $created['term_id'] ), 'seo_cluster' );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Get pillar content status boolean from canonical meta or active SEO plugins.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return bool True if post is pillar content.
+	 */
+	public static function get_post_is_pillar( $post_id ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 || ! function_exists( 'get_post_meta' ) ) {
+			return false;
+		}
+
+		$canonical = get_post_meta( $post_id, '_pushmd_seo_is_pillar', true );
+		if ( '1' === (string) $canonical || true === $canonical ) {
+			return true;
+		} elseif ( '0' === (string) $canonical ) {
+			return false;
+		}
+
+		$rm_val = get_post_meta( $post_id, 'rank_math_pillar_content', true );
+		if ( 'on' === strtolower( trim( (string) $rm_val ) ) ) {
+			return true;
+		}
+
+		$yoast_val = get_post_meta( $post_id, '_yoast_wpseo_is_cornerstone', true );
+		if ( '1' === (string) $yoast_val || true === $yoast_val ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Update pillar content status in canonical meta, Rank Math, and Yoast SEO.
+	 *
+	 * @param int               $post_id Post ID.
+	 * @param bool|string|array $val     Value from frontmatter.
+	 */
+	public static function update_post_is_pillar( $post_id, $val ) {
+		$post_id = intval( $post_id );
+		if ( $post_id <= 0 || ! function_exists( 'update_post_meta' ) ) {
+			return;
+		}
+
+		$raw       = is_array( $val ) ? reset( $val ) : $val;
+		$is_pillar = true === $raw || 1 === $raw || '1' === (string) $raw || 'true' === strtolower( trim( (string) $raw ) );
+
+		update_post_meta( $post_id, '_pushmd_seo_is_pillar', $is_pillar ? '1' : '0' );
+
+		$yoast_active   = self::is_yoast_seo_active();
+		$rm_active      = self::is_rank_math_active();
+		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_pillar_content' );
+		$has_yoast_meta = self::seo_meta_exists( $post_id, '_yoast_wpseo_is_cornerstone' );
+
+		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
+		$update_yoast = $yoast_active || $has_yoast_meta;
+
+		if ( $update_rm ) {
+			update_post_meta( $post_id, 'rank_math_pillar_content', $is_pillar ? 'on' : 'off' );
+		}
+
+		if ( $update_yoast ) {
+			update_post_meta( $post_id, '_yoast_wpseo_is_cornerstone', $is_pillar ? '1' : '0' );
+		}
 	}
 }
