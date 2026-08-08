@@ -143,6 +143,15 @@ get results incrementally.
 - **Do not modify the `plugins/` directory** unless specifically asked. Plugins
   are built from components and have their own build step.
 
+## Upstream PR Workflow
+
+When contributing features back to `upstream/trunk` from a heavily customized local `trunk`:
+
+1. **Isolate the Feature Branch**: Create a clean branch directly off `upstream/trunk` (e.g., `git checkout -b feature/<name> upstream/trunk`).
+2. **Eliminate Unmerged Local Dependencies**: Ensure the ported feature relies only on standard core dependencies or classes present in `upstream/trunk`. Do not import or call unmerged local-only classes or utilities.
+3. **Verify Standalone Test Execution**: Run unit tests on the isolated branch (`vendor/bin/phpunit plugins/<Plugin>/Tests/`) to confirm 100% pass rate before pushing.
+4. **Push & Create PR**: Push the isolated branch to `origin` and target `upstream/trunk` for the Pull Request.
+
 ## Test conventions
 
 - Tests live in `components/<Name>/Tests/`
@@ -152,6 +161,7 @@ get results incrementally.
 - Test fixtures go in `components/<Name>/Tests/fixtures/`
 - Tests MUST pass on PHP 7.2 — use `yoast/phpunit-polyfills` for compatibility
   between PHPUnit versions
+- **Mock Function Isolation**: When adding mock WordPress helper functions in test files (`if ( ! function_exists( 'get_post_meta' ) )`), always support shared global mock storage arrays (`$GLOBALS['mock_post_meta']`, `$GLOBALS['mock_users']`, `$GLOBALS['wp_filter']`). Avoid hardcoding single-value returns (like `return false;`) that lock in global stubs for subsequent test files when running full test suite batches.
 
 ## Verification
 
