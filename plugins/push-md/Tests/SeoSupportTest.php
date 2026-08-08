@@ -43,6 +43,12 @@ if ( ! function_exists( 'wp_get_attachment_url' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_json_encode' ) ) {
+	function wp_json_encode( $data, $options = 0, $depth = 512 ) {
+		return json_encode( $data, $options, $depth );
+	}
+}
+
 if ( ! function_exists( 'get_post_type' ) ) {
 	function get_post_type( $post_id ) {
 		unset( $post_id );
@@ -61,6 +67,7 @@ class SeoSupportTest extends TestCase {
 	/** @before */
 	public function set_up() {
 		$GLOBALS['mock_post_meta'] = array();
+		Push_MD_SEO::bootstrap();
 	}
 
 	public function testAddSupportedFrontmatterKeys() {
