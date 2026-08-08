@@ -4306,7 +4306,12 @@ class Push_MD_Plugin {
 				continue;
 			}
 
-			if ( ! is_scalar( $value ) || is_bool( $value ) ) {
+			if ( is_bool( $value ) ) {
+				$normalized[ $key ] = $value ? 'true' : 'false';
+				continue;
+			}
+
+			if ( ! is_scalar( $value ) ) {
 				throw new Exception(
 					sprintf(
 						'Push rejected because Markdown front matter field "%s" must be a scalar string or number.',

@@ -695,10 +695,14 @@ class Push_MD_SEO {
 		}
 
 		$canonical = get_post_meta( $post_id, '_pushmd_seo_is_pillar', true );
-		if ( '1' === (string) $canonical || true === $canonical ) {
-			return true;
-		} elseif ( '0' === (string) $canonical ) {
-			return false;
+		if ( '' !== trim( (string) $canonical ) ) {
+			$lower = strtolower( trim( (string) $canonical ) );
+			if ( '1' === $lower || 'true' === $lower || 'yes' === $lower || 'on' === $lower ) {
+				return true;
+			}
+			if ( '0' === $lower || 'false' === $lower || 'no' === $lower || 'off' === $lower ) {
+				return false;
+			}
 		}
 
 		$rm_val = get_post_meta( $post_id, 'rank_math_pillar_content', true );
@@ -707,7 +711,7 @@ class Push_MD_SEO {
 		}
 
 		$yoast_val = get_post_meta( $post_id, '_yoast_wpseo_is_cornerstone', true );
-		if ( '1' === (string) $yoast_val || true === $yoast_val ) {
+		if ( '1' === (string) $yoast_val || true === $yoast_val || 'true' === strtolower( trim( (string) $yoast_val ) ) ) {
 			return true;
 		}
 
@@ -727,7 +731,8 @@ class Push_MD_SEO {
 		}
 
 		$raw       = is_array( $val ) ? reset( $val ) : $val;
-		$is_pillar = true === $raw || 1 === $raw || '1' === (string) $raw || 'true' === strtolower( trim( (string) $raw ) );
+		$lower     = strtolower( trim( (string) $raw ) );
+		$is_pillar = true === $raw || 1 === $raw || '1' === $lower || 'true' === $lower || 'yes' === $lower || 'on' === $lower;
 
 		update_post_meta( $post_id, '_pushmd_seo_is_pillar', $is_pillar ? '1' : '0' );
 
