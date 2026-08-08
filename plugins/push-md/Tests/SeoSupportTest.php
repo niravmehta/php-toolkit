@@ -227,4 +227,28 @@ class SeoSupportTest extends TestCase {
 		$pillar_flag = isset( $meta['rank_math_pillar_content'] ) ? $meta['rank_math_pillar_content'] : ( isset( $meta['_yoast_wpseo_is_cornerstone'] ) ? $meta['_yoast_wpseo_is_cornerstone'] : '' );
 		$this->assertTrue( 'on' === $pillar_flag || '1' === $pillar_flag );
 	}
+
+	public function testImportFrontmatterPillarContentVariations() {
+		$inputs = array( 1, '1', true, 'true', 'yes', 'on' );
+
+		foreach ( $inputs as $idx => $input_val ) {
+			$post_id  = 100 + $idx;
+			$metadata = array(
+				'seo_is_pillar' => $input_val,
+			);
+
+			Push_MD_SEO::import_frontmatter( $post_id, $metadata );
+
+			$meta = $GLOBALS['mock_post_meta'][ $post_id ];
+			$this->assertSame( '1', $meta['_pushmd_seo_is_pillar'] );
+			$this->assertTrue( Push_MD_SEO::get_post_is_pillar( $post_id ) );
+
+			$post            = new WP_Post();
+			$post->ID        = $post_id;
+			$post->post_type = 'post';
+
+			$exported = Push_MD_SEO::export_frontmatter( array(), $post );
+			$this->assertSame( array( 'true' ), $exported['seo_is_pillar'] );
+		}
+	}
 }
