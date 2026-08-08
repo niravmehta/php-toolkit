@@ -6,6 +6,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', sys_get_temp_dir() . '/wp-' . uniqid() . '/' );
 }
 
+if ( ! class_exists( 'WP_Post' ) ) {
+	class WP_Post {
+		public $ID          = 0;
+		public $post_type   = 'post';
+		public $post_title  = '';
+		public $post_name   = '';
+		public $post_status = 'publish';
+	}
+}
+
 if ( ! function_exists( 'get_post_meta' ) ) {
 	function get_post_meta( $post_id, $key, $single = false ) {
 		unset( $single );
@@ -43,12 +53,6 @@ if ( ! function_exists( 'wp_get_attachment_url' ) ) {
 	}
 }
 
-if ( ! function_exists( 'wp_json_encode' ) ) {
-	function wp_json_encode( $data, $options = 0, $depth = 512 ) {
-		return json_encode( $data, $options, $depth );
-	}
-}
-
 if ( ! function_exists( 'get_post_type' ) ) {
 	function get_post_type( $post_id ) {
 		unset( $post_id );
@@ -57,7 +61,9 @@ if ( ! function_exists( 'get_post_type' ) ) {
 }
 
 require_once __DIR__ . '/../class-push-md-seo.php';
-require_once __DIR__ . '/../class-push-md-media.php';
+if ( file_exists( __DIR__ . '/../class-push-md-media.php' ) ) {
+	require_once __DIR__ . '/../class-push-md-media.php';
+}
 
 /**
  * Unit tests for Push MD SEO & OpenGraph Frontmatter Support.
@@ -67,7 +73,6 @@ class SeoSupportTest extends TestCase {
 	/** @before */
 	public function set_up() {
 		$GLOBALS['mock_post_meta'] = array();
-		Push_MD_SEO::bootstrap();
 	}
 
 	public function testAddSupportedFrontmatterKeys() {
@@ -191,5 +196,39 @@ class SeoSupportTest extends TestCase {
 
 		$this->assertNotEmpty( $image_url );
 		$this->assertSame( 42, $image_id );
+	}
+
+	public function testExportFrontmatterPillarAndCluster() {
+		$post_id = 60;
+		$post    = new WP_Post();
+		$post->ID = $post_id;
+		$post->post_type = 'post';
+
+		$GLOBALS['mock_post_meta'][ $post_id ] = array(
+			'_pushmd_seo_cluster'      => 'SEO Architecture',
+			'_pushmd_seo_is_pillar'   => '1',
+			'rank_math_pillar_content' => 'on',
+		);
+
+		$metadata = Push_MD_SEO::export_frontmatter( array(), $post );
+
+		$this->assertSame( array( 'SEO Architecture' ), $metadata['seo_cluster'] );
+		$this->assertSame( array( 'true' ), $metadata['seo_is_pillar'] );
+	}
+
+	public function testImportFrontmatterPillarAndCluster() {
+		$post_id  = 70;
+		$metadata = array(
+			'seo_cluster'   => 'Content Marketing',
+			'seo_is_pillar' => 'true',
+		);
+
+		Push_MD_SEO::import_frontmatter( $post_id, $metadata );
+
+		$meta = $GLOBALS['mock_post_meta'][ $post_id ];
+		$this->assertSame( 'Content Marketing', $meta['_pushmd_seo_cluster'] );
+		$this->assertSame( '1', $meta['_pushmd_seo_is_pillar'] );
+		$pillar_flag = isset( $meta['rank_math_pillar_content'] ) ? $meta['rank_math_pillar_content'] : ( isset( $meta['_yoast_wpseo_is_cornerstone'] ) ? $meta['_yoast_wpseo_is_cornerstone'] : '' );
+		$this->assertTrue( 'on' === $pillar_flag || '1' === $pillar_flag );
 	}
 }
