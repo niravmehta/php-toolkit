@@ -31,6 +31,47 @@ class Push_MD_SEO {
 	);
 
 	/**
+	 * Map of frontmatter key => internal field slug for simple text fields.
+	 *
+	 * @var array
+	 */
+	private static $simple_field_map = array(
+		'seo_title'       => 'title',
+		'seo_description' => 'description',
+		'og_title'        => 'og_title',
+		'og_description'  => 'og_description',
+		'canonical'       => 'canonical',
+	);
+
+	/**
+	 * Map of internal field slug => Rank Math and Yoast meta keys.
+	 *
+	 * @var array
+	 */
+	private static $field_meta_keys = array(
+		'title'          => array(
+			'rm'    => 'rank_math_title',
+			'yoast' => '_yoast_wpseo_title',
+		),
+		'description'    => array(
+			'rm'    => 'rank_math_description',
+			'yoast' => '_yoast_wpseo_metadesc',
+		),
+		'og_title'       => array(
+			'rm'    => 'rank_math_facebook_title',
+			'yoast' => '_yoast_wpseo_opengraph-title',
+		),
+		'og_description' => array(
+			'rm'    => 'rank_math_facebook_description',
+			'yoast' => '_yoast_wpseo_opengraph-description',
+		),
+		'canonical'      => array(
+			'rm'    => 'rank_math_canonical_url',
+			'yoast' => '_yoast_wpseo_canonical',
+		),
+	);
+
+	/**
 	 * Register hooks for SEO frontmatter handling.
 	 */
 	public static function bootstrap() {
@@ -85,61 +126,39 @@ class Push_MD_SEO {
 
 		$post_id = (int) $post->ID;
 
-		// 1. Meta Title
-		$seo_title = self::get_post_seo_field_meta( $post_id, 'title' );
-		if ( '' !== $seo_title ) {
-			$metadata['seo_title'] = array( $seo_title );
+		// 1. Simple text fields.
+		foreach ( self::$simple_field_map as $fm_key => $field_slug ) {
+			$val = self::get_post_seo_field_meta( $post_id, $field_slug );
+			if ( '' !== $val ) {
+				$metadata[ $fm_key ] = array( $val );
+			}
 		}
 
-		// 2. Meta Description
-		$seo_desc = self::get_post_seo_field_meta( $post_id, 'description' );
-		if ( '' !== $seo_desc ) {
-			$metadata['seo_description'] = array( $seo_desc );
-		}
-
-		// 3. Focus Keywords
+		// 2. Focus Keywords.
 		$keywords = self::get_post_seo_keywords( $post_id );
 		if ( ! empty( $keywords ) ) {
 			$metadata['seo_keywords'] = $keywords;
 		}
 
-		// 4. OpenGraph Title
-		$og_title = self::get_post_seo_field_meta( $post_id, 'og_title' );
-		if ( '' !== $og_title ) {
-			$metadata['og_title'] = array( $og_title );
-		}
-
-		// 5. OpenGraph Description
-		$og_desc = self::get_post_seo_field_meta( $post_id, 'og_description' );
-		if ( '' !== $og_desc ) {
-			$metadata['og_description'] = array( $og_desc );
-		}
-
-		// 6. OpenGraph Image
+		// 3. OpenGraph Image.
 		$og_image = self::get_post_og_image_meta( $post_id );
 		if ( '' !== $og_image ) {
 			$metadata['og_image'] = array( $og_image );
 		}
 
-		// 7. Canonical URL
-		$canonical = self::get_post_seo_field_meta( $post_id, 'canonical' );
-		if ( '' !== $canonical ) {
-			$metadata['canonical'] = array( $canonical );
-		}
-
-		// 8. Schema Type
+		// 4. Schema Type.
 		$schema_type = self::get_post_schema_type_meta( $post_id, $post->post_type );
 		if ( '' !== $schema_type ) {
 			$metadata['schema_type'] = array( $schema_type );
 		}
 
-		// 9. SEO Cluster
+		// 5. SEO Cluster.
 		$seo_cluster = self::get_post_seo_cluster( $post_id );
 		if ( '' !== $seo_cluster ) {
 			$metadata['seo_cluster'] = array( $seo_cluster );
 		}
 
-		// 10. SEO Pillar
+		// 6. SEO Pillar.
 		if ( self::get_post_is_pillar( $post_id ) ) {
 			$metadata['seo_is_pillar'] = array( 'true' );
 		}
@@ -163,53 +182,31 @@ class Push_MD_SEO {
 			return;
 		}
 
-		// 1. Meta Title
-		if ( isset( $metadata['seo_title'] ) ) {
-			self::update_post_seo_field_meta( $post_id, 'title', $metadata['seo_title'] );
+		// 1. Simple text fields.
+		foreach ( self::$simple_field_map as $fm_key => $field_slug ) {
+			if ( isset( $metadata[ $fm_key ] ) ) {
+				self::update_post_seo_field_meta( $post_id, $field_slug, $metadata[ $fm_key ] );
+			}
 		}
 
-		// 2. Meta Description
-		if ( isset( $metadata['seo_description'] ) ) {
-			self::update_post_seo_field_meta( $post_id, 'description', $metadata['seo_description'] );
-		}
-
-		// 3. Focus Keywords
+		// 2. Specialized fields.
 		if ( isset( $metadata['seo_keywords'] ) ) {
 			self::update_post_seo_keywords( $post_id, $metadata['seo_keywords'] );
 		}
 
-		// 4. OpenGraph Title
-		if ( isset( $metadata['og_title'] ) ) {
-			self::update_post_seo_field_meta( $post_id, 'og_title', $metadata['og_title'] );
-		}
-
-		// 5. OpenGraph Description
-		if ( isset( $metadata['og_description'] ) ) {
-			self::update_post_seo_field_meta( $post_id, 'og_description', $metadata['og_description'] );
-		}
-
-		// 6. OpenGraph Image
 		if ( isset( $metadata['og_image'] ) ) {
 			self::update_post_og_image_meta( $post_id, $metadata['og_image'] );
 		}
 
-		// 7. Canonical URL
-		if ( isset( $metadata['canonical'] ) ) {
-			self::update_post_seo_field_meta( $post_id, 'canonical', $metadata['canonical'] );
-		}
-
-		// 8. Schema Type
 		if ( isset( $metadata['schema_type'] ) ) {
 			$post_type = function_exists( 'get_post_type' ) ? get_post_type( $post_id ) : 'post';
 			self::update_post_schema_type_meta( $post_id, $metadata['schema_type'], $post_type ? $post_type : 'post' );
 		}
 
-		// 9. SEO Cluster
 		if ( isset( $metadata['seo_cluster'] ) ) {
 			self::update_post_seo_cluster( $post_id, $metadata['seo_cluster'] );
 		}
 
-		// 10. SEO Pillar
 		if ( isset( $metadata['seo_is_pillar'] ) ) {
 			self::update_post_is_pillar( $post_id, $metadata['seo_is_pillar'] );
 		}
@@ -264,6 +261,26 @@ class Push_MD_SEO {
 	}
 
 	/**
+	 * Determine whether to update Rank Math and/or Yoast SEO for a given pair of meta keys.
+	 *
+	 * @param int    $post_id   Post ID.
+	 * @param string $rm_key    Rank Math meta key.
+	 * @param string $yoast_key Yoast SEO meta key.
+	 * @return array Array with boolean keys 'rm' and 'yoast'.
+	 */
+	private static function should_update_plugin_meta( $post_id, $rm_key, $yoast_key ) {
+		$yoast_active   = self::is_yoast_seo_active();
+		$rm_active      = self::is_rank_math_active();
+		$has_rm_meta    = ! empty( $rm_key ) ? self::seo_meta_exists( $post_id, $rm_key ) : false;
+		$has_yoast_meta = ! empty( $yoast_key ) ? self::seo_meta_exists( $post_id, $yoast_key ) : false;
+
+		return array(
+			'rm'    => $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta ),
+			'yoast' => $yoast_active || $has_yoast_meta || ( ! $rm_active && ! $has_rm_meta ),
+		);
+	}
+
+	/**
 	 * Get generic SEO or OpenGraph field string value from Rank Math or Yoast SEO.
 	 *
 	 * @param int    $post_id Post ID.
@@ -314,18 +331,12 @@ class Push_MD_SEO {
 			return;
 		}
 
-		$yoast_active   = self::is_yoast_seo_active();
-		$rm_active      = self::is_rank_math_active();
-		$has_rm_meta    = self::seo_meta_exists( $post_id, $keys['rm'] );
-		$has_yoast_meta = self::seo_meta_exists( $post_id, $keys['yoast'] );
+		$targets = self::should_update_plugin_meta( $post_id, $keys['rm'], $keys['yoast'] );
 
-		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
-		$update_yoast = $yoast_active || $has_yoast_meta || ( ! $rm_active && ! $has_rm_meta );
-
-		if ( $update_rm ) {
+		if ( $targets['rm'] ) {
 			update_post_meta( $post_id, $keys['rm'], $val );
 		}
-		if ( $update_yoast ) {
+		if ( $targets['yoast'] ) {
 			update_post_meta( $post_id, $keys['yoast'], $val );
 		}
 	}
@@ -337,38 +348,10 @@ class Push_MD_SEO {
 	 * @return array Array with 'rm' and 'yoast' meta keys.
 	 */
 	private static function get_meta_keys_for_field( $field ) {
-		switch ( $field ) {
-			case 'title':
-				return array(
-					'rm'    => 'rank_math_title',
-					'yoast' => '_yoast_wpseo_title',
-				);
-			case 'description':
-				return array(
-					'rm'    => 'rank_math_description',
-					'yoast' => '_yoast_wpseo_metadesc',
-				);
-			case 'og_title':
-				return array(
-					'rm'    => 'rank_math_facebook_title',
-					'yoast' => '_yoast_wpseo_opengraph-title',
-				);
-			case 'og_description':
-				return array(
-					'rm'    => 'rank_math_facebook_description',
-					'yoast' => '_yoast_wpseo_opengraph-description',
-				);
-			case 'canonical':
-				return array(
-					'rm'    => 'rank_math_canonical_url',
-					'yoast' => '_yoast_wpseo_canonical',
-				);
-			default:
-				return array(
-					'rm'    => '',
-					'yoast' => '',
-				);
-		}
+		return isset( self::$field_meta_keys[ $field ] ) ? self::$field_meta_keys[ $field ] : array(
+			'rm'    => '',
+			'yoast' => '',
+		);
 	}
 
 	/**
@@ -454,22 +437,16 @@ class Push_MD_SEO {
 			}
 		}
 
-		$yoast_active   = self::is_yoast_seo_active();
-		$rm_active      = self::is_rank_math_active();
-		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_facebook_image' );
-		$has_yoast_meta = self::seo_meta_exists( $post_id, '_yoast_wpseo_opengraph-image' );
+		$targets = self::should_update_plugin_meta( $post_id, 'rank_math_facebook_image', '_yoast_wpseo_opengraph-image' );
 
-		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
-		$update_yoast = $yoast_active || $has_yoast_meta;
-
-		if ( $update_rm ) {
+		if ( $targets['rm'] ) {
 			update_post_meta( $post_id, 'rank_math_facebook_image', $image_url );
 			if ( $attachment_id > 0 ) {
 				update_post_meta( $post_id, 'rank_math_facebook_image_id', $attachment_id );
 			}
 		}
 
-		if ( $update_yoast ) {
+		if ( $targets['yoast'] ) {
 			update_post_meta( $post_id, '_yoast_wpseo_opengraph-image', $image_url );
 			if ( $attachment_id > 0 ) {
 				update_post_meta( $post_id, '_yoast_wpseo_opengraph-image-id', $attachment_id );
@@ -525,20 +502,14 @@ class Push_MD_SEO {
 
 		$rm_schema    = strtolower( $val );
 		$yoast_schema = self::normalize_yoast_schema_type( $val );
+		$yoast_key    = 'page' === $post_type ? '_yoast_wpseo_schema_page_type' : '_yoast_wpseo_schema_article_type';
 
-		$yoast_key      = 'page' === $post_type ? '_yoast_wpseo_schema_page_type' : '_yoast_wpseo_schema_article_type';
-		$yoast_active   = self::is_yoast_seo_active();
-		$rm_active      = self::is_rank_math_active();
-		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_rich_snippet' );
-		$has_yoast_meta = self::seo_meta_exists( $post_id, $yoast_key );
+		$targets = self::should_update_plugin_meta( $post_id, 'rank_math_rich_snippet', $yoast_key );
 
-		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
-		$update_yoast = $yoast_active || $has_yoast_meta;
-
-		if ( $update_rm ) {
+		if ( $targets['rm'] ) {
 			update_post_meta( $post_id, 'rank_math_rich_snippet', $rm_schema );
 		}
-		if ( $update_yoast ) {
+		if ( $targets['yoast'] ) {
 			update_post_meta( $post_id, $yoast_key, $yoast_schema );
 		}
 	}
@@ -655,23 +626,17 @@ class Push_MD_SEO {
 		}
 
 		$keywords       = self::parse_seo_keywords_input( $val );
-		$yoast_active   = self::is_yoast_seo_active();
-		$rm_active      = self::is_rank_math_active();
-		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_focus_keyword' );
-		$has_yoast_meta = self::seo_meta_exists( $post_id, '_yoast_wpseo_focuskw' );
-
 		$primary_kw     = ! empty( $keywords ) ? $keywords[0] : '';
 		$additional_kws = count( $keywords ) > 1 ? array_slice( $keywords, 1 ) : array();
 
-		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
-		$update_yoast = $yoast_active || $has_yoast_meta || ( ! $rm_active && ! $has_rm_meta );
+		$targets = self::should_update_plugin_meta( $post_id, 'rank_math_focus_keyword', '_yoast_wpseo_focuskw' );
 
-		if ( $update_rm ) {
+		if ( $targets['rm'] ) {
 			$rm_str = implode( ', ', $keywords );
 			update_post_meta( $post_id, 'rank_math_focus_keyword', $rm_str );
 		}
 
-		if ( $update_yoast ) {
+		if ( $targets['yoast'] ) {
 			update_post_meta( $post_id, '_yoast_wpseo_focuskw', $primary_kw );
 
 			$existing_scores = array();
@@ -856,19 +821,13 @@ class Push_MD_SEO {
 
 		update_post_meta( $post_id, '_pushmd_seo_is_pillar', $is_pillar ? '1' : '0' );
 
-		$yoast_active   = self::is_yoast_seo_active();
-		$rm_active      = self::is_rank_math_active();
-		$has_rm_meta    = self::seo_meta_exists( $post_id, 'rank_math_pillar_content' );
-		$has_yoast_meta = self::seo_meta_exists( $post_id, '_yoast_wpseo_is_cornerstone' );
+		$targets = self::should_update_plugin_meta( $post_id, 'rank_math_pillar_content', '_yoast_wpseo_is_cornerstone' );
 
-		$update_rm    = $rm_active || $has_rm_meta || ( ! $yoast_active && ! $has_yoast_meta );
-		$update_yoast = $yoast_active || $has_yoast_meta;
-
-		if ( $update_rm ) {
+		if ( $targets['rm'] ) {
 			update_post_meta( $post_id, 'rank_math_pillar_content', $is_pillar ? 'on' : 'off' );
 		}
 
-		if ( $update_yoast ) {
+		if ( $targets['yoast'] ) {
 			update_post_meta( $post_id, '_yoast_wpseo_is_cornerstone', $is_pillar ? '1' : '0' );
 		}
 	}
