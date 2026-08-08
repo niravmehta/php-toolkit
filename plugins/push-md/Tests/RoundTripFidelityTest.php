@@ -17,7 +17,23 @@ if ( ! function_exists( 'wp_strip_all_tags' ) ) {
 }
 
 if ( ! function_exists( 'apply_filters' ) ) {
-	function apply_filters( $hook, $value ) {
+	function apply_filters( $tag, $value ) {
+		$args = func_get_args();
+		array_shift( $args );
+		if ( empty( $GLOBALS['wp_filter'][ $tag ] ) ) {
+			return $value;
+		}
+
+		ksort( $GLOBALS['wp_filter'][ $tag ] );
+		foreach ( $GLOBALS['wp_filter'][ $tag ] as $priority => $callbacks ) {
+			foreach ( $callbacks as $cb ) {
+				$accepted  = isset( $cb['accepted_args'] ) ? $cb['accepted_args'] : 1;
+				$call_args = array_slice( $args, 0, $accepted );
+				$value     = call_user_func_array( $cb['function'], $call_args );
+				$args[0]   = $value;
+			}
+		}
+
 		return $value;
 	}
 }

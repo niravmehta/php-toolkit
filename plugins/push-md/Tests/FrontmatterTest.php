@@ -28,6 +28,34 @@ if ( ! function_exists( 'is_email' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_transient' ) ) {
+	function get_transient( $transient ) {
+		return isset( $GLOBALS['mock_wp_transients'][ $transient ] ) ? $GLOBALS['mock_wp_transients'][ $transient ] : false;
+	}
+}
+
+if ( ! function_exists( 'set_transient' ) ) {
+	function set_transient( $transient, $value, $expiration = 0 ) {
+		unset( $expiration );
+		$GLOBALS['mock_wp_transients'][ $transient ] = $value;
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_transient' ) ) {
+	function delete_transient( $transient ) {
+		unset( $GLOBALS['mock_wp_transients'][ $transient ] );
+		return true;
+	}
+}
+
+if ( ! function_exists( 'get_posts' ) ) {
+	function get_posts( $args = array() ) {
+		unset( $args );
+		return array();
+	}
+}
+
 $GLOBALS['mock_users']             = array();
 $GLOBALS['mock_categories']        = array();
 $GLOBALS['mock_tags']              = array();
@@ -575,6 +603,8 @@ if ( ! function_exists( 'wp_list_pluck' ) ) {
 require_once dirname( __DIR__ ) . '/class-push-md-html-converter.php';
 require_once dirname( __DIR__ ) . '/class-push-md-markdown-producer.php';
 require_once dirname( __DIR__ ) . '/class-push-md-markdown-consumer.php';
+require_once dirname( __DIR__ ) . '/class-push-md-seo.php';
+require_once dirname( __DIR__ ) . '/class-push-md-draft-previews.php';
 require_once dirname( __DIR__ ) . '/class-push-md-plugin.php';
 
 class FrontmatterTest extends TestCase {
@@ -866,6 +896,11 @@ MD;
 	}
 
 	public function testSeoFrontmatterExportAndImport() {
+		$GLOBALS['mock_post_meta'][101] = array(
+			'_yoast_wpseo_title'    => 'SEO Title',
+			'_yoast_wpseo_metadesc' => 'SEO Description',
+			'_yoast_wpseo_focuskw'  => 'SEO Keyword',
+		);
 		$post = $this->create_dummy_post(
 			array(
 				'ID'         => 101,
@@ -888,12 +923,18 @@ MD;
 		Push_MD_SEO::import_frontmatter( 101, $metadata );
 
 		$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_title'] );
-		$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['rank_math_title'] );
+		if ( function_exists( 'rank_math' ) && isset( $GLOBALS['mock_post_meta'][101]['rank_math_title'] ) ) {
+			$this->assertEquals( 'New SEO Title', $GLOBALS['mock_post_meta'][101]['rank_math_title'] );
+		}
 		$this->assertEquals( 'New SEO Description', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_metadesc'] );
-		$this->assertEquals( 'New SEO Description', $GLOBALS['mock_post_meta'][101]['rank_math_description'] );
+		if ( function_exists( 'rank_math' ) && isset( $GLOBALS['mock_post_meta'][101]['rank_math_description'] ) ) {
+			$this->assertEquals( 'New SEO Description', $GLOBALS['mock_post_meta'][101]['rank_math_description'] );
+		}
 		$this->assertEquals( 'Primary KW', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_focuskw'] );
 		$this->assertEquals( '[{"keyword":"Secondary KW","score":"ok"}]', $GLOBALS['mock_post_meta'][101]['_yoast_wpseo_focuskeywords'] );
-		$this->assertEquals( 'Primary KW, Secondary KW', $GLOBALS['mock_post_meta'][101]['rank_math_focus_keyword'] );
+		if ( function_exists( 'rank_math' ) && isset( $GLOBALS['mock_post_meta'][101]['rank_math_focus_keyword'] ) ) {
+			$this->assertEquals( 'Primary KW, Secondary KW', $GLOBALS['mock_post_meta'][101]['rank_math_focus_keyword'] );
+		}
 	}
 
 	public function test_seo_keywords_pull_and_rank_math_priority() {

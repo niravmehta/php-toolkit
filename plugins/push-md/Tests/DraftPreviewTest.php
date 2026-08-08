@@ -167,25 +167,58 @@ if ( ! function_exists( 'get_posts' ) ) {
 	}
 }
 
-if ( ! function_exists( 'update_post_meta' ) ) {
-	function update_post_meta( $post_id, $meta_key, $meta_value ) {
-		global $mock_wp_postmeta;
+if ( ! function_exists( 'get_post_meta' ) ) {
+	function get_post_meta( $post_id, $key = '', $single = false ) {
+		$post_id = intval( $post_id );
+		if ( '' === $key ) {
+			if ( isset( $GLOBALS['mock_post_meta'][ $post_id ] ) ) {
+				return $GLOBALS['mock_post_meta'][ $post_id ];
+			}
+			if ( isset( $GLOBALS['mock_wp_postmeta'][ $post_id ] ) ) {
+				return $GLOBALS['mock_wp_postmeta'][ $post_id ];
+			}
+			return array();
+		}
+		if ( isset( $GLOBALS['mock_post_meta'][ $post_id ][ $key ] ) ) {
+			$val = $GLOBALS['mock_post_meta'][ $post_id ][ $key ];
+			return $single ? $val : ( is_array( $val ) ? $val : array( $val ) );
+		}
+		if ( isset( $GLOBALS['mock_wp_postmeta'][ $post_id ][ $key ] ) ) {
+			$val = $GLOBALS['mock_wp_postmeta'][ $post_id ][ $key ];
+			return $single ? $val : ( is_array( $val ) ? $val : array( $val ) );
+		}
 
-		$mock_wp_postmeta[ intval( $post_id ) ][ $meta_key ] = $meta_value;
+		return $single ? '' : array();
+	}
+}
+
+if ( ! function_exists( 'update_post_meta' ) ) {
+	function update_post_meta( $post_id, $key, $value ) {
+		$post_id                                        = intval( $post_id );
+		$GLOBALS['mock_post_meta'][ $post_id ][ $key ]  = $value;
+		$GLOBALS['mock_wp_postmeta'][ $post_id ][ $key ] = $value;
+
 		return true;
 	}
 }
 
-if ( ! function_exists( 'get_post_meta' ) ) {
-	function get_post_meta( $post_id, $key = '', $single = false ) {
-		global $mock_wp_postmeta;
-
+if ( ! function_exists( 'delete_post_meta' ) ) {
+	function delete_post_meta( $post_id, $key, $value = '' ) {
+		unset( $value );
 		$post_id = intval( $post_id );
-		if ( isset( $mock_wp_postmeta[ $post_id ][ $key ] ) ) {
-			return $mock_wp_postmeta[ $post_id ][ $key ];
-		}
+		unset( $GLOBALS['mock_post_meta'][ $post_id ][ $key ] );
+		unset( $GLOBALS['mock_wp_postmeta'][ $post_id ][ $key ] );
 
-		return $single ? '' : array();
+		return true;
+	}
+}
+
+if ( ! function_exists( 'metadata_exists' ) ) {
+	function metadata_exists( $meta_type, $object_id, $meta_key ) {
+		unset( $meta_type );
+		$object_id = intval( $object_id );
+
+		return isset( $GLOBALS['mock_post_meta'][ $object_id ][ $meta_key ] ) || isset( $GLOBALS['mock_wp_postmeta'][ $object_id ][ $meta_key ] );
 	}
 }
 
@@ -223,12 +256,18 @@ if ( ! function_exists( 'wp_slash' ) ) {
 
 if ( ! function_exists( 'get_userdata' ) ) {
 	function get_userdata( $user_id ) {
+		if ( isset( $GLOBALS['mock_users'][ $user_id ] ) ) {
+			return $GLOBALS['mock_users'][ $user_id ];
+		}
 		return false;
 	}
 }
 
 if ( ! function_exists( 'get_the_terms' ) ) {
 	function get_the_terms( $post_id, $taxonomy ) {
+		if ( isset( $GLOBALS['mock_post_terms'][ $post_id ][ $taxonomy ] ) ) {
+			return $GLOBALS['mock_post_terms'][ $post_id ][ $taxonomy ];
+		}
 		return false;
 	}
 }
@@ -251,14 +290,47 @@ if ( ! function_exists( 'get_post_thumbnail_id' ) ) {
 	}
 }
 
+if ( ! function_exists( 'add_filter' ) ) {
+	function add_filter( $tag, $function_to_add, $priority = 10, $accepted_args = 1 ) {
+		$GLOBALS['wp_filter'][ $tag ][ $priority ][] = array(
+			'function'      => $function_to_add,
+			'accepted_args' => $accepted_args,
+		);
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'add_action' ) ) {
+	function add_action( $tag, $function_to_add, $priority = 10, $accepted_args = 1 ) {
+		return add_filter( $tag, $function_to_add, $priority, $accepted_args );
+	}
+}
+
 if ( ! function_exists( 'apply_filters' ) ) {
 	function apply_filters( $tag, $value ) {
+		$args = func_get_args();
+		array_shift( $args );
+		if ( empty( $GLOBALS['wp_filter'][ $tag ] ) ) {
+			return $value;
+		}
+
+		ksort( $GLOBALS['wp_filter'][ $tag ] );
+		foreach ( $GLOBALS['wp_filter'][ $tag ] as $priority => $callbacks ) {
+			foreach ( $callbacks as $cb ) {
+				$call_args = array_slice( $args, 0, $cb['accepted_args'] );
+				$value     = call_user_func_array( $cb['function'], $call_args );
+				$args[0]   = $value;
+			}
+		}
+
 		return $value;
 	}
 }
 
 require_once dirname( __DIR__ ) . '/class-push-md-html-converter.php';
 require_once dirname( __DIR__ ) . '/class-push-md-markdown-producer.php';
+require_once dirname( __DIR__ ) . '/class-push-md-seo.php';
 require_once dirname( __DIR__ ) . '/class-push-md-plugin.php';
 require_once dirname( __DIR__ ) . '/class-push-md-draft-previews.php';
 
