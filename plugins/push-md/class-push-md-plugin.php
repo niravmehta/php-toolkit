@@ -78,6 +78,7 @@ class Push_MD_Plugin {
 	);
 
 	public static function bootstrap() {
+		add_filter( 'wp_knowledge_types', array( __CLASS__, 'register_knowledge_types' ) );
 		add_action( 'init', array( __CLASS__, 'install_default_agent_skill' ), 20 );
 		add_action( 'parse_request', array( __CLASS__, 'maybe_enable_branch_preview' ), 1 );
 		add_action( 'admin_bar_menu', array( __CLASS__, 'add_admin_bar_branch_switcher' ), 90 );
@@ -106,6 +107,14 @@ class Push_MD_Plugin {
 	public static function on_activation() {
 		self::install_default_agent_skill();
 		Push_MD_Seeder::on_activation();
+	}
+
+	public static function register_knowledge_types( $types ) {
+		$types['skill'] = array(
+			'title' => __( 'Skill', 'push-md' ),
+		);
+
+		return $types;
 	}
 
 	public static function install_default_agent_skill() {
