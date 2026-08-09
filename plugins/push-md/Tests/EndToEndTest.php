@@ -1495,7 +1495,8 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Unknown front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter field "author" is not supported.', $push_result['output'] );
+		$this->assertStringContainsString( 'Push rejected in file "post/rejected-unknown-frontmatter.md" because Markdown front matter field "author" is not supported.', $push_result['output'] );
+		$this->assertStringContainsString( 'Supported front matter fields are:', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
