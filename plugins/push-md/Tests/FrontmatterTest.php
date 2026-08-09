@@ -662,22 +662,49 @@ class FrontmatterTest extends TestCase {
 
 	public function testValidatePostFrontmatterReferencesRejectsUnknownCategory() {
 		$this->expectException( Exception::class );
-		$this->expectExceptionMessage( 'category "UnknownCategory" was not found' );
+		$this->expectExceptionMessage( 'category "UnknownCategory" is incorrect or was not found' );
 
 		$metadata = array(
 			'categories' => 'UnknownCategory',
 		);
-		$this->invoke_private( 'validate_post_frontmatter_references', array( $metadata, 'post' ) );
+		$this->invoke_private( 'validate_post_frontmatter_references', array( $metadata, 'post', array(), 'post/my-post.md' ) );
 	}
 
 	public function testValidatePostFrontmatterReferencesRejectsUnknownAuthor() {
 		$this->expectException( Exception::class );
-		$this->expectExceptionMessage( 'author "unknown_user" was not found' );
+		$this->expectExceptionMessage( 'author "unknown_user" is incorrect or was not found' );
 
 		$metadata = array(
 			'author' => 'unknown_user',
 		);
-		$this->invoke_private( 'validate_post_frontmatter_references', array( $metadata, 'post' ) );
+		$this->invoke_private( 'validate_post_frontmatter_references', array( $metadata, 'post', array(), 'post/my-post.md' ) );
+	}
+
+	public function testValidatePostFrontmatterReferencesRejectsUnknownTagIncludesFilePathAndReferenceGuide() {
+		$this->expectException( Exception::class );
+		$this->expectExceptionMessage( 'Push rejected in file "post/test.md" because tag "NonExistentTag" is incorrect or was not found in tags.md or WordPress. Please refer to tags.md in your local repository for correct values.' );
+
+		$metadata = array(
+			'tags' => 'NonExistentTag',
+		);
+		$this->invoke_private( 'validate_post_frontmatter_references', array( $metadata, 'post', array(), 'post/test.md' ) );
+	}
+
+	public function testNormalizeSupportedFrontmatterRejectsUnsupportedFieldWithSupportedListAndFilePath() {
+		$this->expectException( Exception::class );
+		$this->expectExceptionMessage( 'Push rejected in file "post/sample.md" because Markdown front matter field "invalid_field" is not supported. Supported front matter fields are: title, status, author.' );
+
+		$metadata     = array( 'invalid_field' => 'value' );
+		$allowed_keys = array( 'title', 'status', 'author' );
+		$this->invoke_private( 'normalize_supported_frontmatter', array( $metadata, $allowed_keys, 'post/sample.md' ) );
+	}
+
+	public function testFrontmatterDateToMysqlGmtRejectsInvalidFormatWithFilePathAndFormatHint() {
+		$this->expectException( Exception::class );
+		$this->expectExceptionMessage( 'Push rejected in file "post/bad-date.md" because Markdown front matter date "invalid-date" is invalid. Expected format is YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.' );
+
+		$metadata = array( 'date' => 'invalid-date' );
+		$this->invoke_private( 'frontmatter_date_to_mysql_gmt', array( $metadata, 'post/bad-date.md' ) );
 	}
 
 	public function testExportCategoriesMarkdownIncludesParentSlugInYamlList() {
@@ -1112,5 +1139,57 @@ MD;
 
 		$authors_md = $this->invoke_private( 'export_authors_markdown' );
 		$this->assertStringContainsString( 'authors:', $authors_md );
+	}
+
+	public function testSortFrontmatterKeysPreservesTopPriorityAndAlphabetizesRest() {
+		$metadata = array(
+			'categories'   => array( 'Tech' ),
+			'title'        => 'My Title',
+			'custom_beta'  => 'val_b',
+			'id'           => '10',
+			'author'       => 'admin',
+			'status'       => 'publish',
+			'custom_alpha' => 'val_a',
+			'slug'         => 'my-title',
+			'date'         => '2026-08-09',
+		);
+
+		$sorted      = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
+		$sorted_keys = array_keys( $sorted );
+
+		$expected_keys = array(
+			'id',
+			'slug',
+			'title',
+			'date',
+			'status',
+			'author',
+			'categories',
+			'custom_alpha',
+			'custom_beta',
+		);
+
+		$this->assertEquals( $expected_keys, $sorted_keys );
+	}
+
+	public function testSortFrontmatterKeysHandlesPartialPriorityKeys() {
+		$metadata = array(
+			'tags'   => array( 'WordPress' ),
+			'status' => 'draft',
+			'author' => 'admin',
+			'title'  => 'Draft Title',
+		);
+
+		$sorted      = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
+		$sorted_keys = array_keys( $sorted );
+
+		$expected_keys = array(
+			'title',
+			'status',
+			'author',
+			'tags',
+		);
+
+		$this->assertEquals( $expected_keys, $sorted_keys );
 	}
 }

@@ -927,7 +927,7 @@ class Push_MD_Plugin {
 				$block_markup = $skill['content'];
 			}
 		} else {
-			self::assert_markdown_front_matter_is_closed( $entry['content'] );
+			self::assert_markdown_front_matter_is_closed( $entry['content'], $path );
 			$consumer     = new Push_MD_Markdown_Consumer(
 				$entry['content'],
 				self::is_block_editor_enabled( $post_type )
@@ -937,26 +937,8 @@ class Push_MD_Plugin {
 			$metadata     = self::extract_markdown_metadata_with_local_fallback( $entry['content'], $result );
 			$metadata     = self::normalize_supported_frontmatter(
 				$metadata,
-				apply_filters(
-					'push_md_supported_frontmatter_keys',
-					array(
-						'id',
-						'title',
-						'date',
-						'last_modified',
-						'status',
-						'description',
-						'excerpt',
-						'author',
-						'categories',
-						'tags',
-						'featured_image',
-						'seo_title',
-						'seo_description',
-						'seo_keywords',
-					),
-					$post_type
-				)
+				self::get_supported_frontmatter_keys( $post_type ),
+				$path
 			);
 		}
 
@@ -972,7 +954,7 @@ class Push_MD_Plugin {
 		if ( isset( $metadata['status'] ) ) {
 			$post->post_status = self::normalize_frontmatter_status( $metadata['status'] );
 		}
-		$post_date_gmt = self::frontmatter_date_to_mysql_gmt( $metadata );
+		$post_date_gmt = self::frontmatter_date_to_mysql_gmt( $metadata, $path );
 		if ( '' !== $post_date_gmt ) {
 			$post->post_date_gmt = $post_date_gmt;
 			$post->post_date     = get_date_from_gmt( $post_date_gmt );
@@ -991,7 +973,7 @@ class Push_MD_Plugin {
 			return false;
 		}
 
-		self::assert_markdown_front_matter_is_closed( $entry['content'] );
+		self::assert_markdown_front_matter_is_closed( $entry['content'], $path );
 		$metadata = self::parse_markdown_metadata( $entry['content'] );
 
 		return (bool) self::find_post_id_by_path_metadata( $path, $metadata, false );
@@ -2158,6 +2140,7 @@ class Push_MD_Plugin {
 		}
 
 		$metadata = apply_filters( 'push_md_export_frontmatter', $metadata, $post );
+		$metadata = self::sort_frontmatter_keys( $metadata );
 
 		$producer = new Push_MD_Markdown_Producer(
 			new BlocksWithMetadata(
@@ -2167,6 +2150,45 @@ class Push_MD_Plugin {
 		);
 
 		return $producer->produce();
+	}
+
+	public static function sort_frontmatter_keys( $metadata ) {
+		if ( ! is_array( $metadata ) || empty( $metadata ) ) {
+			return $metadata;
+		}
+
+		$priority_ranks = array(
+			'id'     => 1,
+			'slug'   => 2,
+			'title'  => 3,
+			'date'   => 4,
+			'status' => 5,
+		);
+
+		uksort(
+			$metadata,
+			function ( $a, $b ) use ( $priority_ranks ) {
+				$a_key = (string) $a;
+				$b_key = (string) $b;
+
+				$a_rank = isset( $priority_ranks[ $a_key ] ) ? $priority_ranks[ $a_key ] : false;
+				$b_rank = isset( $priority_ranks[ $b_key ] ) ? $priority_ranks[ $b_key ] : false;
+
+				if ( false !== $a_rank && false !== $b_rank ) {
+					return $a_rank - $b_rank;
+				}
+				if ( false !== $a_rank ) {
+					return -1;
+				}
+				if ( false !== $b_rank ) {
+					return 1;
+				}
+
+				return strnatcasecmp( $a_key, $b_key );
+			}
+		);
+
+		return $metadata;
 	}
 
 	private static function export_global_styles_to_json( WP_Post $post ) {
@@ -2778,7 +2800,7 @@ class Push_MD_Plugin {
 			return self::upsert_global_styles_from_json( $path, $markdown, $options );
 		}
 
-		self::assert_markdown_front_matter_is_closed( $markdown );
+		self::assert_markdown_front_matter_is_closed( $markdown, $path );
 		$consumer = new Push_MD_Markdown_Consumer(
 			$markdown,
 			self::is_block_editor_enabled( $post_type )
@@ -2787,43 +2809,13 @@ class Push_MD_Plugin {
 		self::assert_block_markup_is_safe( $result->get_block_markup() );
 		$metadata = self::extract_markdown_metadata_with_local_fallback( $markdown, $result );
 
-		self::reject_path_identity_frontmatter( $metadata );
-		$supported_keys       = array(
-			'id',
-			'title',
-			'slug',
-			'date',
-			'last_modified',
-			'status',
-			'description',
-			'excerpt',
-			'author',
-			'categories',
-			'tags',
-			'featured_image',
-			'seo_title',
-			'seo_description',
-			'seo_keywords',
-		);
-		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
-		if ( is_array( $extra_post_meta_keys ) ) {
-			foreach ( $extra_post_meta_keys as $meta_key ) {
-				$meta_key = (string) $meta_key;
-				if ( '' !== $meta_key && ! in_array( $meta_key, $supported_keys, true ) ) {
-					$supported_keys[] = $meta_key;
-				}
-			}
-		}
-
+		self::reject_path_identity_frontmatter( $metadata, $path );
 		$metadata = self::normalize_supported_frontmatter(
 			$metadata,
-			apply_filters(
-				'push_md_supported_frontmatter_keys',
-				$supported_keys,
-				$post_type
-			)
+			self::get_supported_frontmatter_keys( $post_type ),
+			$path
 		);
-		self::validate_post_frontmatter_references( $metadata, $post_type, $options );
+		self::validate_post_frontmatter_references( $metadata, $post_type, $options, $path );
 
 		$post_id       = self::find_post_id_by_path_metadata( $path, $metadata );
 		$existing_post = $post_id ? get_post( $post_id ) : null;
@@ -2933,14 +2925,14 @@ class Push_MD_Plugin {
 			$postarr['post_parent'] = $post_parent;
 		}
 
-		$post_date_gmt = self::frontmatter_date_to_mysql_gmt( $metadata );
-		self::assert_frontmatter_date_matches_status( $post_status, $post_date_gmt );
+		$post_date_gmt = self::frontmatter_date_to_mysql_gmt( $metadata, $path );
+		self::assert_frontmatter_date_matches_status( $post_status, $post_date_gmt, $path );
 		if ( '' !== $post_date_gmt ) {
 			$postarr['post_date_gmt'] = $post_date_gmt;
 			$postarr['post_date']     = get_date_from_gmt( $post_date_gmt );
 		}
 
-		$post_modified_gmt = self::frontmatter_modified_date_to_mysql_gmt( $metadata );
+		$post_modified_gmt = self::frontmatter_modified_date_to_mysql_gmt( $metadata, $path );
 		if ( '' !== $post_modified_gmt ) {
 			$postarr['post_modified_gmt'] = $post_modified_gmt;
 			$postarr['post_modified']     = get_date_from_gmt( $post_modified_gmt );
@@ -3225,12 +3217,55 @@ class Push_MD_Plugin {
 		}
 	}
 
-	private static function assert_markdown_front_matter_is_closed( $markdown ) {
+	private static function push_rejection_message( $reason, $path = '' ) {
+		$path         = trim( (string) $path );
+		$file_context = '' !== $path ? sprintf( ' in file "%s"', esc_html( $path ) ) : '';
+
+		return sprintf( 'Push rejected%s because %s', $file_context, $reason );
+	}
+
+	private static function throw_push_rejection( $reason, $path = '' ) {
+		throw new Exception( self::push_rejection_message( $reason, $path ) );
+	}
+
+	private static function get_supported_frontmatter_keys( $post_type = 'post' ) {
+		$keys = array(
+			'id',
+			'title',
+			'slug',
+			'date',
+			'last_modified',
+			'status',
+			'description',
+			'excerpt',
+			'author',
+			'categories',
+			'tags',
+			'featured_image',
+			'seo_title',
+			'seo_description',
+			'seo_keywords',
+		);
+
+		$extra_post_meta_keys = apply_filters( 'push_md_post_meta_keys', array(), $post_type );
+		if ( is_array( $extra_post_meta_keys ) ) {
+			foreach ( $extra_post_meta_keys as $meta_key ) {
+				$meta_key = (string) $meta_key;
+				if ( '' !== $meta_key && ! in_array( $meta_key, $keys, true ) ) {
+					$keys[] = $meta_key;
+				}
+			}
+		}
+
+		return apply_filters( 'push_md_supported_frontmatter_keys', $keys, $post_type );
+	}
+
+	private static function assert_markdown_front_matter_is_closed( $markdown, $path = '' ) {
 		if (
 			preg_match( '/\A---\r?\n/', $markdown ) &&
 			! preg_match( '/\A---\r?\n.*?\r?\n---(?:\r?\n|\z)/s', $markdown )
 		) {
-			throw new Exception( 'Push rejected because Markdown front matter is missing its closing --- fence.' );
+			self::throw_push_rejection( 'Markdown front matter is missing its closing --- fence.', $path );
 		}
 	}
 
@@ -3343,10 +3378,11 @@ class Push_MD_Plugin {
 			$metadata       = $skill_document['metadata'];
 			$markdown       = $skill_document['content'];
 			self::assert_block_markup_is_safe( $markdown );
-			self::reject_path_identity_frontmatter( $metadata );
+			self::reject_path_identity_frontmatter( $metadata, $path );
 			$metadata = self::normalize_supported_frontmatter(
 				$metadata,
-				array( 'name', 'description' )
+				array( 'name', 'description' ),
+				$path
 			);
 			if ( isset( $metadata['name'] ) && $metadata['name'] !== $slug ) {
 				throw new Exception( 'Push rejected because the skill name front matter does not match its directory.' );
@@ -4127,11 +4163,14 @@ class Push_MD_Plugin {
 		return gmdate( 'Y-m-d\TH:i:s\Z', $timestamp );
 	}
 
-	private static function frontmatter_modified_date_to_mysql_gmt( $metadata ) {
+	private static function frontmatter_modified_date_to_mysql_gmt( $metadata, $path = '' ) {
 		if ( isset( $metadata['last_modified'] ) && '' !== trim( (string) $metadata['last_modified'] ) ) {
 			$parsed = self::parse_frontmatter_date( $metadata['last_modified'] );
 			if ( '' === $parsed ) {
-				throw new Exception( 'Push rejected because Markdown front matter last_modified is invalid.' );
+				self::throw_push_rejection(
+					sprintf( 'Markdown front matter last_modified "%s" is invalid. Expected format is YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.', esc_html( (string) $metadata['last_modified'] ) ),
+					$path
+				);
 			}
 
 			return $parsed;
@@ -4140,11 +4179,14 @@ class Push_MD_Plugin {
 		return '';
 	}
 
-	private static function frontmatter_date_to_mysql_gmt( $metadata ) {
+	private static function frontmatter_date_to_mysql_gmt( $metadata, $path = '' ) {
 		if ( isset( $metadata['date'] ) && '' !== trim( (string) $metadata['date'] ) ) {
 			$parsed = self::parse_frontmatter_date( $metadata['date'] );
 			if ( '' === $parsed ) {
-				throw new Exception( 'Push rejected because Markdown front matter date is invalid.' );
+				self::throw_push_rejection(
+					sprintf( 'Markdown front matter date "%s" is invalid. Expected format is YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.', esc_html( (string) $metadata['date'] ) ),
+					$path
+				);
 			}
 
 			return $parsed;
@@ -4152,7 +4194,10 @@ class Push_MD_Plugin {
 		if ( isset( $metadata['date_gmt'] ) && '' !== trim( (string) $metadata['date_gmt'] ) ) {
 			$parsed = self::parse_frontmatter_date( $metadata['date_gmt'] );
 			if ( '' === $parsed ) {
-				throw new Exception( 'Push rejected because Markdown front matter date_gmt is invalid.' );
+				self::throw_push_rejection(
+					sprintf( 'Markdown front matter date_gmt "%s" is invalid. Expected format is YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.', esc_html( (string) $metadata['date_gmt'] ) ),
+					$path
+				);
 			}
 
 			return $parsed;
@@ -4204,20 +4249,20 @@ class Push_MD_Plugin {
 		return $datetime->format( 'Y-m-d H:i:s' );
 	}
 
-	private static function assert_frontmatter_date_matches_status( $post_status, $post_date_gmt ) {
+	private static function assert_frontmatter_date_matches_status( $post_status, $post_date_gmt, $path = '' ) {
 		if ( '' === $post_date_gmt ) {
 			if ( 'future' === $post_status ) {
-				throw new Exception( 'Push rejected because scheduled posts must include a future date.' );
+				self::throw_push_rejection( 'scheduled posts must include a future date.', $path );
 			}
 			return;
 		}
 
 		$timestamp = self::timestamp_from_gmt_string( $post_date_gmt );
 		if ( 'future' === $post_status && ( false === $timestamp || $timestamp <= time() ) ) {
-			throw new Exception( 'Push rejected because scheduled posts must include a date in the future.' );
+			self::throw_push_rejection( 'scheduled posts must include a date in the future.', $path );
 		}
 		if ( 'publish' === $post_status && false !== $timestamp && $timestamp > time() ) {
-			throw new Exception( 'Push rejected because published posts must not include a future date. Use scheduled status for future-dated content.' );
+			self::throw_push_rejection( 'published posts must not include a future date. Use scheduled status for future-dated content.', $path );
 		}
 	}
 
@@ -4251,13 +4296,13 @@ class Push_MD_Plugin {
 		return isset( $statuses[ $key ] ) ? $statuses[ $key ] : $post_status;
 	}
 
-	private static function reject_path_identity_frontmatter( $metadata ) {
+	private static function reject_path_identity_frontmatter( $metadata, $path = '' ) {
 		if ( isset( $metadata['type'] ) ) {
-			throw new Exception( 'Push rejected because Markdown front matter must not include a type. The directory determines the post type.' );
+			self::throw_push_rejection( 'Markdown front matter must not include a "type" field. The directory determines the post type.', $path );
 		}
 	}
 
-	private static function normalize_supported_frontmatter( $metadata, $allowed_keys ) {
+	private static function normalize_supported_frontmatter( $metadata, $allowed_keys, $path = '' ) {
 		$allowed = array();
 		foreach ( $allowed_keys as $key ) {
 			$allowed[ $key ] = true;
@@ -4272,11 +4317,14 @@ class Push_MD_Plugin {
 		foreach ( $metadata as $key => $value ) {
 			$key = (string) $key;
 			if ( ! isset( $allowed[ $key ] ) ) {
-				throw new Exception(
+				$supported_list = implode( ', ', $allowed_keys );
+				self::throw_push_rejection(
 					sprintf(
-						'Push rejected because Markdown front matter field "%s" is not supported.',
-						esc_html( $key )
-					)
+						'Markdown front matter field "%s" is not supported. Supported front matter fields are: %s.',
+						esc_html( $key ),
+						esc_html( $supported_list )
+					),
+					$path
 				);
 			}
 
@@ -4291,11 +4339,9 @@ class Push_MD_Plugin {
 			}
 
 			if ( ! is_scalar( $value ) ) {
-				throw new Exception(
-					sprintf(
-						'Push rejected because Markdown front matter field "%s" must be a scalar string or number.',
-						esc_html( $key )
-					)
+				self::throw_push_rejection(
+					sprintf( 'Markdown front matter field "%s" must be a scalar string or number.', esc_html( $key ) ),
+					$path
 				);
 			}
 
@@ -4389,37 +4435,37 @@ class Push_MD_Plugin {
 
 	private static function find_post_id_by_frontmatter_id( $path, $metadata, $include_trash ) {
 		$post_type = self::path_to_post_type( $path );
-		$id        = self::normalize_frontmatter_post_id( $metadata['id'] );
+		$id        = self::normalize_frontmatter_post_id( $metadata['id'], $path );
 		$post      = get_post( $id );
 
 		if ( ! $post ) {
-			throw new Exception( 'Push rejected because Markdown front matter id does not reference an existing WordPress post.' );
+			self::throw_push_rejection( 'Markdown front matter id does not reference an existing WordPress post.', $path );
 		}
 		if ( $post_type !== $post->post_type ) {
-			throw new Exception( 'Push rejected because Markdown front matter id references a different WordPress post type.' );
+			self::throw_push_rejection( 'Markdown front matter id references a different WordPress post type.', $path );
 		}
 
 		$statuses = $include_trash
 			? array_merge( self::$supported_post_statuses, array( 'trash' ) )
 			: self::$supported_post_statuses;
 		if ( ! in_array( $post->post_status, $statuses, true ) ) {
-			throw new Exception( 'Push rejected because Markdown front matter id references a non-exported WordPress post.' );
+			self::throw_push_rejection( 'Markdown front matter id references a non-exported WordPress post.', $path );
 		}
 
 		$path_metadata = $metadata;
 		unset( $path_metadata['id'] );
 		$path_post_id = self::find_post_id_by_path_metadata( $path, $path_metadata, $include_trash );
 		if ( $path_post_id && $path_post_id !== $id ) {
-			throw new Exception( 'Push rejected because Markdown front matter id conflicts with the WordPress post already mapped to this file path.' );
+			self::throw_push_rejection( 'Markdown front matter id conflicts with the WordPress post already mapped to this file path.', $path );
 		}
 
 		return $id;
 	}
 
-	private static function normalize_frontmatter_post_id( $id ) {
+	private static function normalize_frontmatter_post_id( $id, $path = '' ) {
 		$id = trim( (string) $id );
 		if ( ! preg_match( '/^[1-9][0-9]*$/', $id ) ) {
-			throw new Exception( 'Push rejected because Markdown front matter id must be a positive integer.' );
+			self::throw_push_rejection( 'Markdown front matter id must be a positive integer.', $path );
 		}
 
 		return intval( $id );
@@ -5882,13 +5928,16 @@ class Push_MD_Plugin {
 		return $val;
 	}
 
-	private static function validate_post_frontmatter_references( $metadata, $post_type, $options = array() ) {
+	private static function validate_post_frontmatter_references( $metadata, $post_type, $options = array(), $path = '' ) {
 		unset( $post_type );
 
 		if ( isset( $metadata['author'] ) && '' !== trim( (string) $metadata['author'] ) ) {
 			$author_id = self::resolve_frontmatter_author_id( $metadata['author'] );
 			if ( 0 === $author_id ) {
-				throw new Exception( sprintf( 'Push rejected because author "%s" was not found in WordPress.', esc_html( (string) $metadata['author'] ) ) );
+				self::throw_push_rejection(
+					sprintf( 'author "%s" is incorrect or was not found in WordPress. Please refer to authors.md in your local repository for correct values.', esc_html( (string) $metadata['author'] ) ),
+					$path
+				);
 			}
 		}
 
@@ -5900,7 +5949,10 @@ class Push_MD_Plugin {
 				}
 				$term_id = self::resolve_category_path_to_term_id( $cat_path );
 				if ( 0 === $term_id ) {
-					throw new Exception( sprintf( 'Push rejected because category "%s" was not found in categories.md or WordPress.', esc_html( $cat_path ) ) );
+					self::throw_push_rejection(
+						sprintf( 'category "%s" is incorrect or was not found in categories.md or WordPress. Please refer to categories.md in your local repository for correct values.', esc_html( $cat_path ) ),
+						$path
+					);
 				}
 			}
 		}
@@ -5913,7 +5965,10 @@ class Push_MD_Plugin {
 				}
 				$term_id = self::resolve_tag_name_to_term_id( $tag_name );
 				if ( 0 === $term_id ) {
-					throw new Exception( sprintf( 'Push rejected because tag "%s" was not found in tags.md or WordPress.', esc_html( $tag_name ) ) );
+					self::throw_push_rejection(
+						sprintf( 'tag "%s" is incorrect or was not found in tags.md or WordPress. Please refer to tags.md in your local repository for correct values.', esc_html( $tag_name ) ),
+						$path
+					);
 				}
 			}
 		}
@@ -5921,7 +5976,10 @@ class Push_MD_Plugin {
 		if ( isset( $metadata['featured_image'] ) && '' !== trim( (string) $metadata['featured_image'] ) ) {
 			$img_id = self::resolve_featured_image_id( $metadata['featured_image'], $options );
 			if ( 0 === $img_id ) {
-				throw new Exception( sprintf( 'Push rejected because featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ) );
+				self::throw_push_rejection(
+					sprintf( 'featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ),
+					$path
+				);
 			}
 		}
 	}

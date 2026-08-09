@@ -71,7 +71,11 @@ class Push_MD_Markdown_Producer {
 				$content
 			);
 
-			$blocks_obj     = new BlocksWithMetadata( $content, $this->blocks_with_meta->get_all_metadata() );
+			$metadata = $this->blocks_with_meta->get_all_metadata();
+			if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'sort_frontmatter_keys' ) ) {
+				$metadata = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
+			}
+			$blocks_obj     = new BlocksWithMetadata( $content, $metadata );
 			$producer       = new MarkdownProducer( $blocks_obj );
 			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
 		} else {
@@ -133,6 +137,9 @@ class Push_MD_Markdown_Producer {
 	private function frontmatter( $metadata ) {
 		if ( empty( $metadata ) ) {
 			return '';
+		}
+		if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'sort_frontmatter_keys' ) ) {
+			$metadata = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
 		}
 		$frontmatter = '';
 		foreach ( $metadata as $key => $value ) {
