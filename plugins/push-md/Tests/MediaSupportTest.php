@@ -370,4 +370,14 @@ class MediaSupportTest extends TestCase {
 		$this->assertIsArray( $entries );
 		$this->assertEmpty( $entries, 'export_media_content() must return [] — media is push-only and must not be exported on git fetch/clone.' );
 	}
+
+	public function testGenerateAndUpdateAttachmentMetadataHandlesInvalidOrNonexistentFile() {
+		$metadata = Push_MD_Media::generate_and_update_attachment_metadata( 0, '' );
+		$this->assertIsArray( $metadata );
+		$this->assertEmpty( $metadata );
+
+		$metadata_nonexistent = Push_MD_Media::generate_and_update_attachment_metadata( 1, '/non/existent/file.png' );
+		$this->assertIsArray( $metadata_nonexistent );
+		$this->assertEmpty( $metadata_nonexistent );
+	}
 }

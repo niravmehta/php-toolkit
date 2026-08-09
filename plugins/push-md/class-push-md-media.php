@@ -222,13 +222,7 @@ class Push_MD_Media {
 				$bytes_written = file_put_contents( $existing_path, $binary_data ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
 				if ( false !== $bytes_written ) {
 					// Regenerate image metadata (dimensions, thumbnails, etc.).
-					if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
-						if ( file_exists( ABSPATH . 'wp-admin/includes/image.php' ) ) {
-							require_once ABSPATH . 'wp-admin/includes/image.php';
-						}
-						$attach_data = wp_generate_attachment_metadata( $existing_id, $existing_path );
-						wp_update_attachment_metadata( $existing_id, $attach_data );
-					}
+					self::generate_and_update_attachment_metadata( $existing_id, $existing_path );
 					return array(
 						'attachment_id' => (int) $existing_id,
 						'url'           => $existing_url,
@@ -280,13 +274,7 @@ class Push_MD_Media {
 		if ( function_exists( 'wp_insert_attachment' ) ) {
 			$attachment_id = wp_insert_attachment( $attachment, $file_path, $parent_post_id );
 			if ( ! is_wp_error( $attachment_id ) && $attachment_id > 0 ) {
-				if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
-					if ( file_exists( ABSPATH . 'wp-admin/includes/image.php' ) ) {
-						require_once ABSPATH . 'wp-admin/includes/image.php';
-					}
-					$attach_data = wp_generate_attachment_metadata( $attachment_id, $file_path );
-					wp_update_attachment_metadata( $attachment_id, $attach_data );
-				}
+				self::generate_and_update_attachment_metadata( $attachment_id, $file_path );
 
 				return array(
 					'attachment_id' => (int) $attachment_id,
@@ -299,6 +287,43 @@ class Push_MD_Media {
 			'attachment_id' => 0,
 			'url'           => $url,
 		);
+	}
+
+	/**
+	 * Ensure WordPress image administration headers/libraries are loaded
+	 * and generate attachment metadata (including thumbnails/sub-sizes).
+	 *
+	 * @param int    $attachment_id Attachment post ID.
+	 * @param string $file_path     Full path to attached file.
+	 * @return array Generated attachment metadata array.
+	 */
+	public static function generate_and_update_attachment_metadata( $attachment_id, $file_path ) {
+		$attachment_id = (int) $attachment_id;
+		if ( $attachment_id <= 0 || empty( $file_path ) || ! file_exists( $file_path ) ) {
+			return array();
+		}
+
+		if ( defined( 'ABSPATH' ) ) {
+			if ( file_exists( ABSPATH . 'wp-admin/includes/image.php' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/image.php';
+			}
+			if ( file_exists( ABSPATH . 'wp-admin/includes/file.php' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/file.php';
+			}
+			if ( file_exists( ABSPATH . 'wp-admin/includes/media.php' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/media.php';
+			}
+		}
+
+		if ( function_exists( 'wp_generate_attachment_metadata' ) && function_exists( 'wp_update_attachment_metadata' ) ) {
+			$attach_data = wp_generate_attachment_metadata( $attachment_id, $file_path );
+			if ( is_array( $attach_data ) && ! empty( $attach_data ) ) {
+				wp_update_attachment_metadata( $attachment_id, $attach_data );
+				return $attach_data;
+			}
+		}
+
+		return array();
 	}
 
 	/**
