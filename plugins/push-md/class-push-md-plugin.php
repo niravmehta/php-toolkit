@@ -2909,6 +2909,8 @@ class Push_MD_Plugin {
 			if ( $existing_post ) {
 				if ( $requested_slug !== $existing_post->post_name ) {
 					$postarr['post_name'] = $requested_slug;
+				} elseif ( $slug !== $existing_post->post_name && ! self::path_uses_id_fallback_slug( $path ) ) {
+					$postarr['post_name'] = $slug;
 				}
 			} else {
 				$conflict = function_exists( 'get_page_by_path' ) ? get_page_by_path( $requested_slug, OBJECT, $post_type ) : false;
@@ -2976,6 +2978,9 @@ class Push_MD_Plugin {
 			$existing_post = self::restore_trashed_post_before_update( $existing_post );
 			$postarr['ID'] = $existing_post->ID;
 			$post_id       = wp_update_post( wp_slash( $postarr ), true );
+			if ( ! is_wp_error( $post_id ) && $post_id > 0 && function_exists( 'wp_save_post_revision' ) ) {
+				wp_save_post_revision( $post_id );
+			}
 		} else {
 			$post_id = wp_insert_post( wp_slash( $postarr ), true );
 		}
