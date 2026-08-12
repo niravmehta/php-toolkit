@@ -1088,7 +1088,8 @@ class Push_MD_Plugin {
 	}
 
 	public static function handle_rest_request( WP_REST_Request $request ) {
-		@ini_set( 'memory_limit', '512M' ); // phpcs:ignore WordPress.PHP.IniSet.memory_limit_Disallowed -- Large Git packfile operations require extra memory buffer.
+		@set_time_limit( 0 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Large Git operations and media processing require extra time budget.
+		@ini_set( 'memory_limit', '512M' ); // phpcs:ignore WordPress.PHP.IniSet.memory_limit_Disallowed, WordPress.PHP.NoSilencedErrors.Discouraged -- Large Git packfile operations require extra memory buffer.
 		$previous_error_handler = set_error_handler( array( __CLASS__, 'throw_on_php_warning' ) ); // phpcs:ignore
 		$git_path               = '';
 
@@ -2783,7 +2784,7 @@ class Push_MD_Plugin {
 
 	private static function reject_symlink_file_changes( $old_files, $new_files ) {
 		foreach ( $new_files as $path => $entry ) {
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK !== $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK !== $entry['mode'] || Push_MD_Path_Filter::is_ignored_path( $path ) ) {
 				continue;
 			}
 			if ( ! isset( $old_files[ $path ] ) || ! self::repository_entries_match( $old_files[ $path ], $entry ) ) {
@@ -2792,7 +2793,7 @@ class Push_MD_Plugin {
 		}
 
 		foreach ( $old_files as $path => $entry ) {
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK !== $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK !== $entry['mode'] || Push_MD_Path_Filter::is_ignored_path( $path ) ) {
 				continue;
 			}
 			if ( ! isset( $new_files[ $path ] ) || ! self::repository_entries_match( $entry, $new_files[ $path ] ) ) {
@@ -2803,7 +2804,7 @@ class Push_MD_Plugin {
 
 	private static function reject_executable_file_changes( $old_files, $new_files ) {
 		foreach ( $new_files as $path => $entry ) {
-			if ( TreeEntry::FILE_MODE_REGULAR_EXECUTABLE !== $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_REGULAR_EXECUTABLE !== $entry['mode'] || Push_MD_Path_Filter::is_ignored_path( $path ) ) {
 				continue;
 			}
 			if ( ! isset( $old_files[ $path ] ) || ! self::repository_entries_match( $old_files[ $path ], $entry ) ) {

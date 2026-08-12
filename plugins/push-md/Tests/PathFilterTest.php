@@ -133,4 +133,31 @@ class PathFilterTest extends TestCase {
 		$this->assertContains( 'Push MD received push (no WordPress content changes):', $messages );
 		$this->assertContains( '- Ignored unsupported path: work/scratch.txt', $messages );
 	}
+
+	public function testSymlinkAndExecutableInIgnoredPathsAllowed() {
+		$old_files = array();
+		$new_files = array(
+			'work/symlink_file' => array(
+				'mode'    => '120000', // Symbolic link
+				'content' => 'target',
+			),
+			'work/script.sh'    => array(
+				'mode'    => '100755', // Executable file
+				'content' => '#!/bin/sh',
+			),
+		);
+
+		$reflection = new ReflectionClass( Push_MD_Plugin::class );
+		$m_symlink  = $reflection->getMethod( 'reject_symlink_file_changes' );
+		$m_exec     = $reflection->getMethod( 'reject_executable_file_changes' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$m_symlink->setAccessible( true );
+			$m_exec->setAccessible( true );
+		}
+
+		$m_symlink->invoke( null, $old_files, $new_files );
+		$m_exec->invoke( null, $old_files, $new_files );
+
+		$this->assertTrue( true );
+	}
 }
