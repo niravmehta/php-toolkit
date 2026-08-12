@@ -105,6 +105,7 @@ class Push_MD_Media {
 	 * @throws Exception On validation or upload failure.
 	 */
 	public static function process_commit_media_files( $commit_files = array(), $dry_run = false ) {
+		@set_time_limit( 0 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Batch media thumbnail generation requires time budget extension.
 		$uploaded_map = array();
 
 		if ( ! is_array( $commit_files ) ) {
