@@ -1090,6 +1090,7 @@ class Push_MD_Plugin {
 	}
 
 	public static function handle_rest_request( WP_REST_Request $request ) {
+		@ini_set( 'memory_limit', '512M' ); // phpcs:ignore WordPress.PHP.IniSet.memory_limit_Disallowed -- Large Git packfile operations require extra memory buffer.
 		$previous_error_handler = set_error_handler( array( __CLASS__, 'throw_on_php_warning' ) ); // phpcs:ignore
 		$git_path               = '';
 
