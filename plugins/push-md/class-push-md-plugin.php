@@ -17,6 +17,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-push-md-path-filter.php';
+
 /**
  * Push MD – exposes WordPress as a Git remote.
  *
@@ -1580,7 +1582,6 @@ class Push_MD_Plugin {
 		self::add_default_agent_guidance_files( $files, $has_guideline_skills, $agent_guide_skill_path );
 		self::add_global_styles_overlay_file( $files );
 		self::add_master_taxonomy_and_author_files( $files );
-		self::add_gitignore_file( $files );
 
 		$media_files = Push_MD_Media::export_media_content();
 		foreach ( $media_files as $m_path => $m_entry ) {
@@ -2369,11 +2370,6 @@ class Push_MD_Plugin {
 			);
 		}
 
-		$files['.gitignore'] = array(
-			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => self::get_default_gitignore_content(),
-		);
-
 		return $files;
 	}
 
@@ -2487,7 +2483,6 @@ class Push_MD_Plugin {
 
 		self::reject_symlink_file_changes( $old_files, $new_files );
 		self::reject_executable_file_changes( $old_files, $new_files );
-		self::reject_gitignore_file_changes( $old_files, $new_files );
 		self::reject_deleted_raw_block_files( $old_files, $new_files );
 		self::reject_deleted_theme_base_files( $old_files, $new_files );
 		self::reject_deleted_global_styles_files( $old_files, $new_files );
@@ -2497,7 +2492,7 @@ class Push_MD_Plugin {
 			if ( isset( $old_files[ $path ] ) && self::repository_entries_match( $old_files[ $path ], $entry ) ) {
 				continue;
 			}
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || Push_MD_Path_Filter::is_ignored_path( $path ) ) {
 				continue;
 			}
 			if ( self::is_theme_base_path( $path ) ) {
@@ -2525,7 +2520,6 @@ class Push_MD_Plugin {
 		$trash_plans      = array();
 		self::reject_symlink_file_changes( $old_files, $new_files );
 		self::reject_executable_file_changes( $old_files, $new_files );
-		self::reject_gitignore_file_changes( $old_files, $new_files );
 		self::reject_deleted_raw_block_files( $old_files, $new_files );
 		self::reject_deleted_theme_base_files( $old_files, $new_files );
 		self::reject_deleted_global_styles_files( $old_files, $new_files );
@@ -2546,7 +2540,21 @@ class Push_MD_Plugin {
 			if ( isset( $old_files[ $path ] ) && self::repository_entries_match( $old_files[ $path ], $entry ) ) {
 				continue;
 			}
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] ) {
+				continue;
+			}
+			if ( Push_MD_Path_Filter::is_ignored_path( $path ) ) {
+				if ( ! $dry_run ) {
+					$changes[] = array(
+						'action'    => 'ignored',
+						'post_id'   => 0,
+						'post_type' => '',
+						'status'    => '',
+						'title'     => '',
+						'url'       => '',
+						'path'      => $path,
+					);
+				}
 				continue;
 			}
 			if ( Push_MD_Media::is_media_path( $path ) ) {
@@ -2580,7 +2588,7 @@ class Push_MD_Plugin {
 			if ( isset( $new_files[ $path ] ) ) {
 				continue;
 			}
-			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || self::is_gitignore_path( $path ) ) {
+			if ( TreeEntry::FILE_MODE_SYMBOLIC_LINK === $entry['mode'] || Push_MD_Path_Filter::is_ignored_path( $path ) ) {
 				continue;
 			}
 
@@ -3499,37 +3507,62 @@ class Push_MD_Plugin {
 			return array();
 		}
 
-		$messages   = array();
-		$messages[] = sprintf(
-			'Push MD applied %d content %s:',
-			count( $push_summary ),
-			1 === count( $push_summary ) ? 'change' : 'changes'
-		);
+		$messages = array();
+		$applied  = array();
+		$ignored  = array();
 
 		foreach ( $push_summary as $change ) {
-			if ( 'draft_preview' === $change['action'] ) {
-				$preview_url = ! empty( $change['preview_url'] ) ? $change['preview_url'] : $change['url'];
-				$messages[]  = sprintf(
-					'- Updated draft preview revision for %s %s',
-					$change['post_type'],
-					self::sanitize_push_summary_text( $change['path'] )
-				);
-				$messages[]  = sprintf(
-					'  Preview URL: %s',
-					self::sanitize_push_summary_text( $preview_url )
-				);
-			} elseif ( 'discarded_preview' === $change['action'] ) {
-				$messages[] = sprintf(
-					'- Discarded draft preview for %s %s (reverted to live version)',
-					$change['post_type'],
-					self::sanitize_push_summary_text( $change['path'] )
-				);
+			if ( 'ignored' === $change['action'] ) {
+				$ignored[] = $change;
 			} else {
+				$applied[] = $change;
+			}
+		}
+
+		if ( ! empty( $applied ) ) {
+			$messages[] = sprintf(
+				'Push MD applied %d content %s:',
+				count( $applied ),
+				1 === count( $applied ) ? 'change' : 'changes'
+			);
+
+			foreach ( $applied as $change ) {
+				if ( 'draft_preview' === $change['action'] ) {
+					$preview_url = ! empty( $change['preview_url'] ) ? $change['preview_url'] : $change['url'];
+					$messages[]  = sprintf(
+						'- Updated draft preview revision for %s %s',
+						$change['post_type'],
+						self::sanitize_push_summary_text( $change['path'] )
+					);
+					$messages[]  = sprintf(
+						'  Preview URL: %s',
+						self::sanitize_push_summary_text( $preview_url )
+					);
+				} elseif ( 'discarded_preview' === $change['action'] ) {
+					$messages[] = sprintf(
+						'- Discarded draft preview for %s %s (reverted to live version)',
+						$change['post_type'],
+						self::sanitize_push_summary_text( $change['path'] )
+					);
+				} else {
+					$messages[] = sprintf(
+						'- %s %s: %s',
+						ucfirst( $change['action'] ),
+						$change['post_type'],
+						self::sanitize_push_summary_text( $change['url'] ? $change['url'] : $change['path'] )
+					);
+				}
+			}
+		}
+
+		if ( ! empty( $ignored ) ) {
+			if ( empty( $applied ) ) {
+				$messages[] = 'Push MD received push (no WordPress content changes):';
+			}
+			foreach ( $ignored as $change ) {
 				$messages[] = sprintf(
-					'- %s %s: %s',
-					ucfirst( $change['action'] ),
-					$change['post_type'],
-					self::sanitize_push_summary_text( $change['url'] ? $change['url'] : $change['path'] )
+					'- Ignored unsupported path: %s',
+					self::sanitize_push_summary_text( $change['path'] )
 				);
 			}
 		}
@@ -4676,7 +4709,7 @@ class Push_MD_Plugin {
 	}
 
 	private static function path_to_post_type( $path ) {
-		if ( self::is_master_metadata_path( $path ) || self::is_gitignore_path( $path ) ) {
+		if ( self::is_master_metadata_path( $path ) ) {
 			return 'master_metadata';
 		}
 
@@ -4695,7 +4728,7 @@ class Push_MD_Plugin {
 	}
 
 	private static function path_to_slug( $path ) {
-		if ( self::is_master_metadata_path( $path ) || self::is_gitignore_path( $path ) ) {
+		if ( self::is_master_metadata_path( $path ) ) {
 			return pathinfo( basename( $path ), PATHINFO_FILENAME );
 		}
 
@@ -5269,148 +5302,10 @@ class Push_MD_Plugin {
 		return $message;
 	}
 
-	private static function is_gitignore_path( $path ) {
-		return '.gitignore' === ltrim( (string) $path, '/' );
-	}
-
 	private static function is_master_metadata_path( $path ) {
 		$clean_path = ltrim( $path, '/' );
 
 		return in_array( $clean_path, array( 'categories.md', 'tags.md', 'authors.md' ), true );
-	}
-
-	private static function add_gitignore_file( &$files ) {
-		/**
-		 * Filters whether to include a default .gitignore file in the Push MD repository export.
-		 *
-		 * @param bool $export_gitignore Whether to export .gitignore. Default true.
-		 */
-		if ( ! apply_filters( 'push_md_export_gitignore', true ) ) {
-			return;
-		}
-
-		$content = self::get_default_gitignore_content();
-
-		/**
-		 * Filters the final content of the exported .gitignore file.
-		 *
-		 * @param string $content The .gitignore file content.
-		 */
-		$content = apply_filters( 'push_md_gitignore_content', $content );
-
-		$files['.gitignore'] = array(
-			'post'    => null,
-			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => $content,
-		);
-	}
-
-	private static function get_default_gitignore_content() {
-		$rules = array(
-			'# Ignore everything by default',
-			'*',
-			'',
-			'# Allow directories so Git can traverse into them',
-			'!*/',
-			'',
-			'# Root files',
-			'!.gitignore',
-			'!AGENTS.md',
-			'!CLAUDE.md',
-			'!categories.md',
-			'!tags.md',
-			'!authors.md',
-			'',
-			'# Guidance directories',
-			'!.agents/',
-			'!.agents/**',
-			'!.claude/',
-			'!.claude/**',
-		);
-
-		$post_type_rules = array();
-		foreach ( self::get_supported_post_types() as $post_type ) {
-			foreach ( self::get_post_type_gitignore_patterns( $post_type ) as $pattern ) {
-				$post_type_rules[] = $pattern;
-			}
-		}
-
-		if ( ! empty( $post_type_rules ) ) {
-			$rules[] = '';
-			$rules[] = '# Supported content paths (dynamically generated)';
-			foreach ( array_unique( $post_type_rules ) as $rule ) {
-				$rules[] = $rule;
-			}
-		}
-
-		$rules[] = '';
-		$rules[] = '# Media assets';
-		$rules[] = '!media/';
-		$rules[] = '!media/**';
-
-		$rules[] = '';
-		$rules[] = '# Read-only theme context';
-		$rules[] = '!wp_theme/';
-		$rules[] = '!wp_theme/**/*.json';
-
-		/**
-		 * Filters the array of rules included in the default .gitignore file.
-		 *
-		 * @param array $rules Array of rule lines.
-		 */
-		$rules = apply_filters( 'push_md_gitignore_rules', $rules );
-		$rules = is_array( $rules ) ? $rules : array();
-
-		return implode( "\n", $rules ) . "\n";
-	}
-
-	private static function get_post_type_gitignore_patterns( $post_type ) {
-		if ( 'wp_guideline' === $post_type ) {
-			return array( '!wp_guideline/', '!wp_guideline/**' );
-		}
-
-		if ( 'wp_global_styles' === $post_type ) {
-			return array( '!wp_global_styles/', '!wp_global_styles/*.json' );
-		}
-
-		if ( self::is_theme_scoped_raw_block_post_type( $post_type ) ) {
-			return array( '!' . $post_type . '/', '!' . $post_type . '/**/*.html' );
-		}
-
-		if ( 'wp_navigation' === $post_type ) {
-			return array( '!wp_navigation/', '!wp_navigation/*.html' );
-		}
-
-		$is_hierarchical = 'page' === $post_type || ( function_exists( 'is_post_type_hierarchical' ) && is_post_type_hierarchical( $post_type ) );
-
-		return array(
-			'!' . $post_type . '/',
-			$is_hierarchical ? '!' . $post_type . '/**/*.md' : '!' . $post_type . '/*.md',
-		);
-	}
-
-	private static function reject_gitignore_file_changes( $old_files, $new_files ) {
-		if ( ! apply_filters( 'push_md_export_gitignore', true ) ) {
-			return;
-		}
-
-		foreach ( $new_files as $path => $entry ) {
-			if ( ! self::is_gitignore_path( $path ) ) {
-				continue;
-			}
-			if ( isset( $old_files[ $path ] ) && ! self::repository_entries_match( $old_files[ $path ], $entry ) ) {
-				throw new Exception( 'Push rejected because .gitignore is managed by Push MD and cannot be modified.' );
-			}
-		}
-
-		foreach ( $old_files as $path => $entry ) {
-			if ( ! self::is_gitignore_path( $path ) ) {
-				continue;
-			}
-			if ( ! isset( $new_files[ $path ] ) ) {
-				throw new Exception( 'Push rejected because .gitignore is managed by Push MD and cannot be deleted.' );
-			}
-		}
 	}
 
 	private static function add_master_taxonomy_and_author_files( &$files ) {
