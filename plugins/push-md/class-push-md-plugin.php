@@ -18,6 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once __DIR__ . '/class-push-md-path-filter.php';
+require_once __DIR__ . '/class-push-md-master-metadata.php';
 
 /**
  * Push MD – exposes WordPress as a Git remote.
@@ -70,18 +71,16 @@ class Push_MD_Plugin {
 	private static $active_preview_files         = null;
 	private static $active_preview_changed_paths = array();
 
-	private static $guideline_type_directories = array(
-		'artifact'    => 'artifacts',
-		'content'     => 'content',
-		'instruction' => 'instructions',
-		'memory'      => 'memories',
-		'plan'        => 'plans',
-		'skill'       => 'skills',
+	private static $knowledge_type_directories = array(
+		'guideline' => 'guidelines',
+		'memory'    => 'memories',
+		'note'      => 'notes',
+		'skill'     => 'skills',
 	);
 
 	public static function bootstrap() {
 		add_filter( 'wp_knowledge_types', array( __CLASS__, 'register_knowledge_types' ) );
-		add_action( 'init', array( __CLASS__, 'install_default_agent_skill' ), 20 );
+		add_action( 'admin_init', array( __CLASS__, 'install_default_agent_skill' ) );
 		add_action( 'parse_request', array( __CLASS__, 'maybe_enable_branch_preview' ), 1 );
 		add_action( 'admin_bar_menu', array( __CLASS__, 'add_admin_bar_branch_switcher' ), 90 );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
@@ -120,7 +119,17 @@ class Push_MD_Plugin {
 	}
 
 	public static function install_default_agent_skill() {
-		if ( ! self::guidelines_available() || ! function_exists( 'push_md_install_skill' ) ) {
+		$knowledge_post_type = get_post_type_object( 'wp_knowledge' );
+		$publish_capability  = $knowledge_post_type && isset( $knowledge_post_type->cap->publish_posts )
+			? $knowledge_post_type->cap->publish_posts
+			: 'publish_posts';
+
+		if (
+			! self::knowledge_available() ||
+			! function_exists( 'push_md_install_skill' ) ||
+			! current_user_can( 'manage_options' ) ||
+			! current_user_can( $publish_capability )
+		) {
 			return;
 		}
 
@@ -151,25 +160,15 @@ class Push_MD_Plugin {
 			self::get_existing_raw_block_post_types(),
 			self::get_existing_json_post_types()
 		);
-		if ( self::guidelines_available() ) {
-			$post_types[] = 'wp_guideline';
+		if ( self::knowledge_available() ) {
+			$post_types[] = 'wp_knowledge';
 		}
 
 		return $post_types;
 	}
 
-	private static function guidelines_available() {
-		return post_type_exists( 'wp_guideline' ) && taxonomy_exists( 'wp_guideline_type' );
-	}
-
-	private static function guidelines_enabled() {
-		if ( self::guidelines_available() ) {
-			return true;
-		}
-
-		$experiments = get_option( 'gutenberg-experiments' );
-
-		return is_array( $experiments ) && ! empty( $experiments['gutenberg-guidelines'] );
+	private static function knowledge_available() {
+		return post_type_exists( 'wp_knowledge' ) && taxonomy_exists( 'wp_knowledge_type' );
 	}
 
 	private static function get_default_agent_skill_content() {
@@ -929,11 +928,11 @@ class Push_MD_Plugin {
 			return null;
 		}
 
-		if ( 'wp_guideline' === $post_type ) {
+		if ( 'wp_knowledge' === $post_type ) {
 			$metadata     = array();
 			$block_markup = $entry['content'];
-			if ( self::is_guideline_skill_path( $path ) ) {
-				$skill        = self::split_guideline_skill_markdown( $entry['content'] );
+			if ( self::is_knowledge_skill_path( $path ) ) {
+				$skill        = self::split_knowledge_skill_markdown( $entry['content'] );
 				$metadata     = $skill['metadata'];
 				$block_markup = $skill['content'];
 			}
@@ -1530,7 +1529,7 @@ class Push_MD_Plugin {
 		usort( $posts, array( __CLASS__, 'compare_post_precedence' ) );
 
 		$files                  = array();
-		$has_guideline_skills   = false;
+		$has_knowledge_skills   = false;
 		$agent_guide_skill_path = null;
 		$can_read_all_exports   = current_user_can( 'edit_others_posts' );
 		foreach ( $posts as $post ) {
@@ -1554,17 +1553,17 @@ class Push_MD_Plugin {
 				'content' => $content,
 			);
 
-			if ( 'wp_guideline' === $post->post_type && self::is_guideline_skill_path( $path ) ) {
-				$has_guideline_skills = true;
-				if ( self::AGENT_SKILL_SOURCE === get_post_meta( $post->ID, 'push_md_guideline_source', true ) ) {
+			if ( 'wp_knowledge' === $post->post_type && self::is_knowledge_skill_path( $path ) ) {
+				$has_knowledge_skills = true;
+				if ( self::AGENT_SKILL_SOURCE === get_post_meta( $post->ID, 'push_md_knowledge_source', true ) ) {
 					$agent_guide_skill_path = $path;
 				}
 			}
 		}
 
-		self::add_default_agent_guidance_files( $files, $has_guideline_skills, $agent_guide_skill_path );
+		self::add_default_agent_guidance_files( $files, $has_knowledge_skills, $agent_guide_skill_path );
 		self::add_global_styles_overlay_file( $files );
-		self::add_master_taxonomy_and_author_files( $files );
+		Push_MD_Master_Metadata::add_master_taxonomy_and_author_files( $files );
 
 		$media_files = Push_MD_Media::export_media_content();
 		foreach ( $media_files as $m_path => $m_entry ) {
@@ -1582,7 +1581,7 @@ class Push_MD_Plugin {
 			);
 		}
 
-		if ( $has_guideline_skills ) {
+		if ( $has_knowledge_skills ) {
 			foreach ( self::get_agent_skills_directory_symlink_paths() as $symlink_path => $target ) {
 				$files[ $symlink_path ] = array(
 					'post'    => null,
@@ -1607,8 +1606,8 @@ class Push_MD_Plugin {
 		return $files;
 	}
 
-	private static function add_default_agent_guidance_files( &$files, &$has_guideline_skills, &$agent_guide_skill_path ) {
-		if ( ! self::guidelines_enabled() ) {
+	private static function add_default_agent_guidance_files( &$files, &$has_knowledge_skills, &$agent_guide_skill_path ) {
+		if ( ! self::knowledge_available() ) {
 			return;
 		}
 
@@ -1624,7 +1623,7 @@ class Push_MD_Plugin {
 		);
 
 		foreach ( $default_skills as $slug => $skill ) {
-			$path = 'wp_guideline/skills/' . $slug . '/SKILL.md';
+			$path = 'wp_knowledge/skills/' . $slug . '/SKILL.md';
 			if ( ! isset( $files[ $path ] ) ) {
 				$files[ $path ] = array(
 					'post'    => null,
@@ -1637,11 +1636,11 @@ class Push_MD_Plugin {
 				);
 			}
 
-			$has_guideline_skills = true;
+			$has_knowledge_skills = true;
 		}
 
 		if ( ! $agent_guide_skill_path ) {
-			$agent_guide_skill_path = 'wp_guideline/skills/' . self::AGENT_SKILL_SLUG . '/SKILL.md';
+			$agent_guide_skill_path = 'wp_knowledge/skills/' . self::AGENT_SKILL_SLUG . '/SKILL.md';
 		}
 	}
 
@@ -1824,8 +1823,8 @@ class Push_MD_Plugin {
 
 	public static function build_markdown_path( $post_or_type, $slug = null ) {
 		if ( $post_or_type instanceof WP_Post ) {
-			if ( 'wp_guideline' === $post_or_type->post_type ) {
-				return self::build_guideline_markdown_path( $post_or_type );
+			if ( 'wp_knowledge' === $post_or_type->post_type ) {
+				return self::build_knowledge_markdown_path( $post_or_type );
 			}
 			if ( self::is_raw_block_post_type( $post_or_type->post_type ) ) {
 				return self::build_raw_block_path(
@@ -2109,9 +2108,9 @@ class Push_MD_Plugin {
 	 * seeder can reuse the conversion without duplicating logic.
 	 */
 	public static function export_post_to_markdown( WP_Post $post ) {
-		if ( 'wp_guideline' === $post->post_type ) {
-			if ( 'skill' === self::get_guideline_type_slug( $post->ID ) ) {
-				return self::export_guideline_skill_to_markdown( $post );
+		if ( 'wp_knowledge' === $post->post_type ) {
+			if ( 'skill' === self::get_knowledge_type_slug( $post->ID ) ) {
+				return self::export_knowledge_skill_to_markdown( $post );
 			}
 
 			return $post->post_content;
@@ -2277,7 +2276,7 @@ class Push_MD_Plugin {
 		return 3;
 	}
 
-	private static function export_guideline_skill_to_markdown( WP_Post $post ) {
+	private static function export_knowledge_skill_to_markdown( WP_Post $post ) {
 		return self::format_skill_markdown(
 			$post->post_name,
 			trim( $post->post_excerpt ),
@@ -2306,28 +2305,28 @@ class Push_MD_Plugin {
 		return $encoded;
 	}
 
-	private static function build_guideline_markdown_path( WP_Post $post ) {
-		$type_slug = self::get_guideline_type_slug( $post->ID );
-		$directory = self::guideline_type_to_directory( $type_slug );
+	private static function build_knowledge_markdown_path( WP_Post $post ) {
+		$type_slug = self::get_knowledge_type_slug( $post->ID );
+		$directory = self::knowledge_type_to_directory( $type_slug );
 
 		if ( 'skill' === $type_slug ) {
-			return 'wp_guideline/' . $directory . '/' . $post->post_name . '/SKILL.md';
+			return 'wp_knowledge/' . $directory . '/' . $post->post_name . '/SKILL.md';
 		}
 
-		return 'wp_guideline/' . $directory . '/' . $post->post_name . '.md';
+		return 'wp_knowledge/' . $directory . '/' . $post->post_name . '.md';
 	}
 
-	private static function get_guideline_type_slug( $post_id ) {
-		if ( ! taxonomy_exists( 'wp_guideline_type' ) ) {
-			return 'artifact';
+	private static function get_knowledge_type_slug( $post_id ) {
+		if ( ! taxonomy_exists( 'wp_knowledge_type' ) ) {
+			return 'note';
 		}
 
-		$terms = get_the_terms( $post_id, 'wp_guideline_type' );
+		$terms = get_the_terms( $post_id, 'wp_knowledge_type' );
 		if ( is_wp_error( $terms ) || empty( $terms ) ) {
-			return 'artifact';
+			return 'note';
 		}
 
-		$known_types = array_keys( self::$guideline_type_directories );
+		$known_types = array_keys( self::$knowledge_type_directories );
 		foreach ( $known_types as $known_type ) {
 			foreach ( $terms as $term ) {
 				if ( $known_type === $term->slug ) {
@@ -2339,27 +2338,27 @@ class Push_MD_Plugin {
 		return $terms[0]->slug;
 	}
 
-	private static function guideline_type_to_directory( $type_slug ) {
-		if ( isset( self::$guideline_type_directories[ $type_slug ] ) ) {
-			return self::$guideline_type_directories[ $type_slug ];
+	private static function knowledge_type_to_directory( $type_slug ) {
+		if ( isset( self::$knowledge_type_directories[ $type_slug ] ) ) {
+			return self::$knowledge_type_directories[ $type_slug ];
 		}
 
 		return sanitize_title( $type_slug ) . 's';
 	}
 
-	private static function guideline_directory_to_type( $directory ) {
-		$type_slug = array_search( $directory, self::$guideline_type_directories, true );
+	private static function knowledge_directory_to_type( $directory ) {
+		$type_slug = array_search( $directory, self::$knowledge_type_directories, true );
 		if ( false !== $type_slug ) {
 			return $type_slug;
 		}
 
-		throw new Exception( 'Push rejected because the guideline type directory is not supported yet.' );
+		throw new Exception( 'Push rejected because the Knowledge type directory is not supported yet.' );
 	}
 
 	private static function get_agent_skills_directory_symlink_paths() {
 		return array(
-			'.agents/skills' => '../wp_guideline/skills',
-			'.claude/skills' => '../wp_guideline/skills',
+			'.agents/skills' => '../wp_knowledge/skills',
+			'.claude/skills' => '../wp_knowledge/skills',
 		);
 	}
 
@@ -2371,7 +2370,7 @@ class Push_MD_Plugin {
 	}
 
 	public static function get_default_agent_guidance_preview_files() {
-		if ( ! self::guidelines_enabled() ) {
+		if ( ! self::knowledge_available() ) {
 			return array();
 		}
 
@@ -2388,7 +2387,7 @@ class Push_MD_Plugin {
 		);
 
 		foreach ( $default_skills as $slug => $skill ) {
-			$files[ 'wp_guideline/skills/' . $slug . '/SKILL.md' ] = array(
+			$files[ 'wp_knowledge/skills/' . $slug . '/SKILL.md' ] = array(
 				'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
 				'content' => self::format_skill_markdown(
 					$slug,
@@ -2405,7 +2404,7 @@ class Push_MD_Plugin {
 			);
 		}
 
-		foreach ( self::get_agent_entrypoint_symlink_paths( 'wp_guideline/skills/' . self::AGENT_SKILL_SLUG . '/SKILL.md' ) as $path => $target ) {
+		foreach ( self::get_agent_entrypoint_symlink_paths( 'wp_knowledge/skills/' . self::AGENT_SKILL_SLUG . '/SKILL.md' ) as $path => $target ) {
 			$files[ $path ] = array(
 				'mode'    => TreeEntry::FILE_MODE_SYMBOLIC_LINK,
 				'content' => $target,
@@ -2571,7 +2570,7 @@ class Push_MD_Plugin {
 			if ( isset( $new_files[ $master_file ] ) ) {
 				$master_entry = $new_files[ $master_file ];
 				if ( ! isset( $old_files[ $master_file ] ) || ! self::repository_entries_match( $old_files[ $master_file ], $master_entry ) ) {
-					self::upsert_master_metadata_from_markdown( $master_file, $master_entry['content'], array( 'dry_run' => $dry_run ) );
+					Push_MD_Master_Metadata::upsert_master_metadata_from_markdown( $master_file, $master_entry['content'], array( 'dry_run' => $dry_run ) );
 				}
 			}
 		}
@@ -2843,14 +2842,14 @@ class Push_MD_Plugin {
 
 	private static function upsert_post_from_markdown( $path, $markdown, $options = array() ) {
 		self::assert_content_has_no_nul_bytes( $markdown );
-		if ( self::is_master_metadata_path( $path ) ) {
-			return self::upsert_master_metadata_from_markdown( $path, $markdown, $options );
+		if ( Push_MD_Master_Metadata::is_master_metadata_path( $path ) ) {
+			return Push_MD_Master_Metadata::upsert_master_metadata_from_markdown( $path, $markdown, $options );
 		}
 
 		$post_type = self::path_to_post_type( $path );
 		$slug      = self::path_to_slug( $path );
-		if ( 'wp_guideline' === $post_type ) {
-			return self::upsert_guideline_from_markdown( $path, $markdown, $options );
+		if ( 'wp_knowledge' === $post_type ) {
+			return self::upsert_knowledge_from_markdown( $path, $markdown, $options );
 		}
 		if ( self::is_raw_block_post_type( $post_type ) ) {
 			return self::upsert_raw_block_post_from_html( $path, $markdown, $options );
@@ -2874,7 +2873,7 @@ class Push_MD_Plugin {
 			self::get_supported_frontmatter_keys( $post_type ),
 			$path
 		);
-		self::validate_post_frontmatter_references( $metadata, $post_type, $options, $path );
+		Push_MD_Master_Metadata::validate_post_frontmatter_references( $metadata, $post_type, $options, $path );
 
 		$post_id       = self::find_post_id_by_path_metadata( $path, $metadata );
 		$existing_post = $post_id ? get_post( $post_id ) : null;
@@ -3012,7 +3011,7 @@ class Push_MD_Plugin {
 		}
 
 		if ( isset( $metadata['author'] ) && '' !== trim( $metadata['author'] ) ) {
-			$author_id = self::resolve_frontmatter_author_id( $metadata['author'] );
+			$author_id = Push_MD_Master_Metadata::resolve_frontmatter_author_id( $metadata['author'] );
 			if ( $author_id > 0 ) {
 				$postarr['post_author'] = $author_id;
 			}
@@ -3081,10 +3080,10 @@ class Push_MD_Plugin {
 		}
 
 		if ( isset( $metadata['categories'] ) ) {
-			self::assign_post_categories( $post_id, $metadata['categories'] );
+			Push_MD_Master_Metadata::assign_post_categories( $post_id, $metadata['categories'] );
 		}
 		if ( isset( $metadata['tags'] ) ) {
-			self::assign_post_tags( $post_id, $metadata['tags'] );
+			Push_MD_Master_Metadata::assign_post_tags( $post_id, $metadata['tags'] );
 		}
 		if ( isset( $metadata['featured_image'] ) ) {
 			self::assign_post_featured_image( $post_id, $metadata['featured_image'], $options );
@@ -3295,7 +3294,7 @@ class Push_MD_Plugin {
 		return sprintf( 'Push rejected%s because %s', $file_context, $reason );
 	}
 
-	private static function throw_push_rejection( $reason, $path = '' ) {
+	public static function throw_push_rejection( $reason, $path = '' ) {
 		throw new Exception( self::push_rejection_message( $reason, $path ) );
 	}
 
@@ -3331,7 +3330,7 @@ class Push_MD_Plugin {
 		return apply_filters( 'push_md_supported_frontmatter_keys', $keys, $post_type );
 	}
 
-	private static function assert_markdown_front_matter_is_closed( $markdown, $path = '' ) {
+	public static function assert_markdown_front_matter_is_closed( $markdown, $path = '' ) {
 		if (
 			preg_match( '/\A---\r?\n/', $markdown ) &&
 			! preg_match( '/\A---\r?\n.*?\r?\n---(?:\r?\n|\z)/s', $markdown )
@@ -3436,16 +3435,16 @@ class Push_MD_Plugin {
 		return true;
 	}
 
-	private static function upsert_guideline_from_markdown( $path, $markdown, $options = array() ) {
-		if ( ! self::guidelines_available() ) {
-			throw new Exception( 'Push rejected because Gutenberg Guidelines are not available on this site.' );
+	private static function upsert_knowledge_from_markdown( $path, $markdown, $options = array() ) {
+		if ( ! self::knowledge_available() ) {
+			throw new Exception( 'Push rejected because Knowledge is not available on this site.' );
 		}
 
 		$slug                = self::path_to_slug( $path );
-		$guideline_type_slug = self::path_to_guideline_type_slug( $path );
+		$knowledge_type_slug = self::path_to_knowledge_type_slug( $path );
 		$metadata            = array();
-		if ( 'skill' === $guideline_type_slug ) {
-			$skill_document = self::split_guideline_skill_markdown( $markdown );
+		if ( 'skill' === $knowledge_type_slug ) {
+			$skill_document = self::split_knowledge_skill_markdown( $markdown );
 			$metadata       = $skill_document['metadata'];
 			$markdown       = $skill_document['content'];
 			self::assert_block_markup_is_safe( $markdown );
@@ -3469,8 +3468,8 @@ class Push_MD_Plugin {
 		$post_status    = self::normalize_frontmatter_status(
 			isset( $metadata['status'] ) ? $metadata['status'] : $default_status
 		);
-		self::validate_post_status( $post_status, 'wp_guideline' );
-		self::assert_can_set_post_status( 'wp_guideline', $post_status, $existing_post );
+		self::validate_post_status( $post_status, 'wp_knowledge' );
+		self::assert_can_set_post_status( 'wp_knowledge', $post_status, $existing_post );
 
 		if (
 			$existing_post &&
@@ -3484,13 +3483,13 @@ class Push_MD_Plugin {
 		if ( $existing_post ) {
 			self::assert_can_edit_post( $existing_post->ID );
 		} else {
-			self::assert_can_create_post_type( 'wp_guideline' );
+			self::assert_can_create_post_type( 'wp_knowledge' );
 		}
 
 		$postarr = array(
-			'post_type'    => 'wp_guideline',
+			'post_type'    => 'wp_knowledge',
 			'post_name'    => $slug,
-			'post_title'   => self::guideline_title_from_metadata( $metadata, $slug, $existing_post ),
+			'post_title'   => self::knowledge_title_from_metadata( $metadata, $slug, $existing_post ),
 			'post_status'  => $post_status,
 			'post_content' => $markdown,
 		);
@@ -3519,8 +3518,8 @@ class Push_MD_Plugin {
 			throw new Exception( esc_html( $post_id->get_error_message() ) );
 		}
 
-		$term_id   = self::get_or_create_guideline_type_term_id( $guideline_type_slug );
-		$set_terms = wp_set_object_terms( $post_id, array( $term_id ), 'wp_guideline_type' );
+		$term_id   = self::get_or_create_knowledge_type_term_id( $knowledge_type_slug );
+		$set_terms = wp_set_object_terms( $post_id, array( $term_id ), 'wp_knowledge_type' );
 		if ( is_wp_error( $set_terms ) ) {
 			throw new Exception( esc_html( $set_terms->get_error_message() ) );
 		}
@@ -4822,30 +4821,30 @@ class Push_MD_Plugin {
 	}
 
 	private static function path_to_post_type( $path ) {
-		if ( self::is_master_metadata_path( $path ) ) {
+		if ( Push_MD_Master_Metadata::is_master_metadata_path( $path ) ) {
 			return 'master_metadata';
 		}
 
 		$segments = explode( '/', ltrim( $path, '/' ) );
-		if ( ! empty( $segments[0] ) && 'wp_guideline' === $segments[0] && ! self::guidelines_available() ) {
-			throw new Exception( 'Push rejected because Gutenberg Guidelines are not available on this site.' );
+		if ( ! empty( $segments[0] ) && 'wp_knowledge' === $segments[0] && ! self::knowledge_available() ) {
+			throw new Exception( 'Push rejected because Knowledge is not available on this site.' );
 		}
 		if ( empty( $segments[0] ) || ! in_array( $segments[0], self::get_supported_post_types(), true ) ) {
 			throw new Exception( 'Push rejected because the file path is outside the supported post type directories.' );
 		}
-		if ( 'wp_guideline' === $segments[0] ) {
-			self::path_to_guideline_type_slug( $path );
+		if ( 'wp_knowledge' === $segments[0] ) {
+			self::path_to_knowledge_type_slug( $path );
 		}
 
 		return $segments[0];
 	}
 
 	private static function path_to_slug( $path ) {
-		if ( self::is_master_metadata_path( $path ) ) {
+		if ( Push_MD_Master_Metadata::is_master_metadata_path( $path ) ) {
 			return pathinfo( basename( $path ), PATHINFO_FILENAME );
 		}
 
-		if ( self::is_guideline_skill_path( $path ) ) {
+		if ( self::is_knowledge_skill_path( $path ) ) {
 			$segments = explode( '/', ltrim( $path, '/' ) );
 			self::assert_markdown_slug_is_canonical( $segments[2] );
 			return $segments[2];
@@ -5015,36 +5014,36 @@ class Push_MD_Plugin {
 		return ! empty( $segments[0] ) && 'wp_global_styles' === $segments[0];
 	}
 
-	private static function path_to_guideline_type_slug( $path ) {
+	private static function path_to_knowledge_type_slug( $path ) {
 		$segments = explode( '/', ltrim( $path, '/' ) );
 		if (
 			count( $segments ) < 3 ||
-			'wp_guideline' !== $segments[0] ||
-			! in_array( $segments[1], self::$guideline_type_directories, true )
+			'wp_knowledge' !== $segments[0] ||
+			! in_array( $segments[1], self::$knowledge_type_directories, true )
 		) {
-			throw new Exception( 'Push rejected because guideline files must live under wp_guideline/<type> directories.' );
+			throw new Exception( 'Push rejected because Knowledge files must live under wp_knowledge/<type> directories.' );
 		}
 
-		$type_slug = self::guideline_directory_to_type( $segments[1] );
+		$type_slug = self::knowledge_directory_to_type( $segments[1] );
 		if ( 'skill' === $type_slug ) {
 			if ( 4 !== count( $segments ) || 'SKILL.md' !== $segments[3] ) {
-				throw new Exception( 'Push rejected because guideline skills must use wp_guideline/skills/<name>/SKILL.md.' );
+				throw new Exception( 'Push rejected because Knowledge skills must use wp_knowledge/skills/<name>/SKILL.md.' );
 			}
 			return $type_slug;
 		}
 
 		if ( 3 !== count( $segments ) || 'md' !== pathinfo( $segments[2], PATHINFO_EXTENSION ) ) {
-			throw new Exception( 'Push rejected because guideline files must be Markdown files.' );
+			throw new Exception( 'Push rejected because Knowledge files must be Markdown files.' );
 		}
 
 		return $type_slug;
 	}
 
-	private static function is_guideline_skill_path( $path ) {
+	private static function is_knowledge_skill_path( $path ) {
 		$segments = explode( '/', ltrim( $path, '/' ) );
 
 		return 4 === count( $segments )
-			&& 'wp_guideline' === $segments[0]
+			&& 'wp_knowledge' === $segments[0]
 			&& 'skills' === $segments[1]
 			&& '' !== $segments[2]
 			&& 'SKILL.md' === $segments[3];
@@ -5083,7 +5082,7 @@ class Push_MD_Plugin {
 		return $metadata;
 	}
 
-	private static function split_guideline_skill_markdown( $markdown ) {
+	private static function split_knowledge_skill_markdown( $markdown ) {
 		$metadata = array();
 		$content  = $markdown;
 
@@ -5099,7 +5098,7 @@ class Push_MD_Plugin {
 		);
 	}
 
-	private static function guideline_title_from_metadata( $metadata, $slug, $existing_post = null ) {
+	private static function knowledge_title_from_metadata( $metadata, $slug, $existing_post = null ) {
 		if ( isset( $metadata['title'] ) && '' !== trim( (string) $metadata['title'] ) ) {
 			return $metadata['title'];
 		}
@@ -5113,15 +5112,15 @@ class Push_MD_Plugin {
 		return ucwords( str_replace( '-', ' ', $slug ) );
 	}
 
-	private static function get_or_create_guideline_type_term_id( $slug ) {
-		$term = get_term_by( 'slug', $slug, 'wp_guideline_type' );
+	private static function get_or_create_knowledge_type_term_id( $slug ) {
+		$term = get_term_by( 'slug', $slug, 'wp_knowledge_type' );
 		if ( $term ) {
 			return (int) $term->term_id;
 		}
 
 		$inserted = wp_insert_term(
 			ucwords( str_replace( '-', ' ', $slug ) ),
-			'wp_guideline_type',
+			'wp_knowledge_type',
 			array( 'slug' => $slug )
 		);
 
@@ -5413,797 +5412,6 @@ class Push_MD_Plugin {
 		}
 
 		return $message;
-	}
-
-	private static function is_master_metadata_path( $path ) {
-		$clean_path = ltrim( $path, '/' );
-
-		return in_array( $clean_path, array( 'categories.md', 'tags.md', 'authors.md' ), true );
-	}
-
-	private static function add_master_taxonomy_and_author_files( &$files ) {
-		$files['categories.md'] = array(
-			'post'    => null,
-			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => self::export_categories_markdown(),
-		);
-		$files['tags.md']       = array(
-			'post'    => null,
-			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => self::export_tags_markdown(),
-		);
-		$files['authors.md']    = array(
-			'post'    => null,
-			'mode'    => TreeEntry::FILE_MODE_REGULAR_NON_EXECUTABLE,
-			'content' => self::export_authors_markdown(),
-		);
-	}
-
-	private static function export_categories_markdown() {
-		$terms = get_terms(
-			array(
-				'taxonomy'   => 'category',
-				'hide_empty' => false,
-				'orderby'    => 'name',
-				'order'      => 'ASC',
-			)
-		);
-		$list  = array();
-		if ( is_array( $terms ) ) {
-			foreach ( $terms as $term ) {
-				$parent_slug = '';
-				if ( $term->parent > 0 ) {
-					$parent_term = get_term( $term->parent, 'category' );
-					if ( $parent_term && ! is_wp_error( $parent_term ) ) {
-						$parent_slug = $parent_term->slug;
-					}
-				}
-				$list[] = array(
-					'id'          => intval( $term->term_id ),
-					'name'        => $term->name,
-					'slug'        => $term->slug,
-					'description' => $term->description,
-					'parent'      => $parent_slug,
-				);
-			}
-		}
-
-		$content = self::format_yaml_list( 'categories', $list ) . "\n# WordPress Categories Master Reference\n";
-
-		return $content;
-	}
-
-	private static function format_yaml_list( $key, array $items ) {
-		$yaml = "---\n" . $key . ":\n";
-		foreach ( $items as $item ) {
-			$first = true;
-			foreach ( $item as $k => $v ) {
-				$val_str = wp_json_encode( (string) $v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
-				if ( $first ) {
-					$yaml .= '  - ' . $k . ': ' . $val_str . "\n";
-					$first = false;
-				} else {
-					$yaml .= '    ' . $k . ': ' . $val_str . "\n";
-				}
-			}
-		}
-		$yaml .= "---\n";
-
-		return $yaml;
-	}
-
-	private static function export_tags_markdown() {
-		$terms = get_terms(
-			array(
-				'taxonomy'   => 'post_tag',
-				'hide_empty' => false,
-				'orderby'    => 'name',
-				'order'      => 'ASC',
-			)
-		);
-		$list  = array();
-		if ( is_array( $terms ) ) {
-			foreach ( $terms as $term ) {
-				$list[] = array(
-					'id'          => intval( $term->term_id ),
-					'name'        => $term->name,
-					'slug'        => $term->slug,
-					'description' => $term->description,
-				);
-			}
-		}
-
-		$content = self::format_yaml_list( 'tags', $list ) . "\n# WordPress Tags Master Reference\n";
-
-		return $content;
-	}
-
-	private static function user_can_edit_any_supported_post_type( $user ) {
-		$post_types = self::get_supported_post_types();
-		foreach ( $post_types as $post_type ) {
-			$pt_obj = get_post_type_object( $post_type );
-			$cap    = ( $pt_obj && isset( $pt_obj->cap->edit_posts ) ) ? $pt_obj->cap->edit_posts : 'edit_posts';
-			if ( user_can( $user, $cap ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private static function export_authors_markdown() {
-		$users = get_users(
-			array(
-				'orderby' => 'user_login',
-				'order'   => 'ASC',
-			)
-		);
-		$list  = array();
-		if ( is_array( $users ) ) {
-			foreach ( $users as $user ) {
-				if ( ! self::user_can_edit_any_supported_post_type( $user ) ) {
-					continue;
-				}
-				$author_data     = array(
-					'user_login'    => $user->user_login,
-					'display_name'  => $user->display_name,
-					'first_name'    => get_user_meta( $user->ID, 'first_name', true ),
-					'last_name'     => get_user_meta( $user->ID, 'last_name', true ),
-					'user_email'    => $user->user_email,
-					'user_nicename' => $user->user_nicename,
-					'description'   => get_user_meta( $user->ID, 'description', true ),
-				);
-				$extra_meta_keys = apply_filters( 'push_md_author_meta_keys', array(), $user );
-				if ( is_array( $extra_meta_keys ) ) {
-					foreach ( $extra_meta_keys as $meta_key ) {
-						$meta_key = (string) $meta_key;
-						if ( '' !== $meta_key && ! isset( $author_data[ $meta_key ] ) ) {
-							$val = get_user_meta( $user->ID, $meta_key, true );
-							if ( '' !== $val && false !== $val && null !== $val ) {
-								$author_data[ $meta_key ] = $val;
-							}
-						}
-					}
-				}
-
-				$author_data = apply_filters( 'push_md_export_author', $author_data, $user );
-				$list[]      = $author_data;
-			}
-		}
-
-		$content = self::format_yaml_list( 'authors', $list ) . "\n# WordPress Authors Master Reference\n";
-
-		return $content;
-	}
-
-	private static function assert_can_sync_authors( $markdown ) {
-		$data = self::parse_master_file_data( $markdown, 'authors' );
-		if ( ! is_array( $data ) ) {
-			return;
-		}
-
-		$current_user_id = get_current_user_id();
-
-		foreach ( $data as $item ) {
-			if ( ! is_array( $item ) || empty( $item['user_login'] ) ) {
-				continue;
-			}
-			$login = (string) $item['user_login'];
-			$user  = get_user_by( 'login', $login );
-			if ( ! $user ) {
-				$user = get_user_by( 'slug', $login );
-			}
-			if ( ! $user ) {
-				throw new Exception( sprintf( 'Push rejected because author "%s" was not found in WordPress.', esc_html( $login ) ) );
-			}
-
-			$can_edit = ( $current_user_id && (int) $current_user_id === (int) $user->ID )
-						|| current_user_can( 'edit_users' )
-						|| current_user_can( 'edit_user', $user->ID );
-
-			if ( ! $can_edit ) {
-				throw new Exception( sprintf( 'Push rejected because you do not have permission to edit author "%s".', esc_html( $login ) ) );
-			}
-		}
-	}
-
-	private static function assert_can_sync_terms( $taxonomy ) {
-		$tax_obj = get_taxonomy( $taxonomy );
-		$cap     = ( $tax_obj && isset( $tax_obj->cap->manage_terms ) ) ? $tax_obj->cap->manage_terms : 'manage_categories';
-		if ( ! current_user_can( $cap ) ) {
-			throw new Exception( sprintf( 'Push rejected because you do not have permission to manage %s.', esc_html( $taxonomy ) ) );
-		}
-	}
-
-	private static function upsert_master_metadata_from_markdown( $path, $markdown, $options = array() ) {
-		$clean_path = ltrim( $path, '/' );
-
-		if ( 'authors.md' === $clean_path ) {
-			self::assert_can_sync_authors( $markdown );
-		} elseif ( 'categories.md' === $clean_path ) {
-			self::assert_can_sync_terms( 'category' );
-		} elseif ( 'tags.md' === $clean_path ) {
-			self::assert_can_sync_terms( 'post_tag' );
-		}
-
-		if ( ! empty( $options['dry_run'] ) ) {
-			return array(
-				'post_id' => 0,
-				'change'  => null,
-			);
-		}
-
-		if ( 'categories.md' === $clean_path ) {
-			self::sync_categories_from_markdown( $markdown );
-		} elseif ( 'tags.md' === $clean_path ) {
-			self::sync_tags_from_markdown( $markdown );
-		} elseif ( 'authors.md' === $clean_path ) {
-			self::sync_authors_from_markdown( $markdown );
-		}
-
-		return array(
-			'post_id' => 0,
-			'change'  => null,
-		);
-	}
-
-	private static function sync_categories_from_markdown( $markdown ) {
-		$data = self::parse_master_file_data( $markdown, 'categories' );
-		if ( ! is_array( $data ) ) {
-			return;
-		}
-
-		$processed_term_ids = array();
-
-		foreach ( $data as $item ) {
-			if ( ! is_array( $item ) || empty( $item['name'] ) ) {
-				continue;
-			}
-			$name        = (string) $item['name'];
-			$slug        = ! empty( $item['slug'] ) ? (string) $item['slug'] : sanitize_title( $name );
-			$description = isset( $item['description'] ) ? (string) $item['description'] : '';
-			$parent_slug = isset( $item['parent'] ) ? trim( (string) $item['parent'] ) : '';
-
-			$parent_id = 0;
-			if ( '' !== $parent_slug ) {
-				$parent_term = false;
-				if ( is_numeric( $parent_slug ) ) {
-					$parent_term = get_term( intval( $parent_slug ), 'category' );
-					if ( is_wp_error( $parent_term ) || ! $parent_term ) {
-						$parent_term = false;
-					}
-				}
-				if ( ! $parent_term ) {
-					$parent_term = get_term_by( 'slug', $parent_slug, 'category' );
-				}
-				if ( ! $parent_term ) {
-					$parent_term = get_term_by( 'name', $parent_slug, 'category' );
-				}
-				if ( $parent_term && ! is_wp_error( $parent_term ) ) {
-					$parent_id = $parent_term->term_id;
-				}
-			}
-
-			$existing = false;
-			if ( ! empty( $item['id'] ) ) {
-				$existing = get_term( intval( $item['id'] ), 'category' );
-				if ( is_wp_error( $existing ) || ! $existing ) {
-					$existing = false;
-				}
-			}
-			if ( ! $existing ) {
-				$existing = get_term_by( 'slug', $slug, 'category' );
-			}
-			if ( ! $existing ) {
-				$existing = get_term_by( 'name', $name, 'category' );
-			}
-
-			if ( $existing && ! is_wp_error( $existing ) ) {
-				$updated = wp_update_term(
-					$existing->term_id,
-					'category',
-					array(
-						'name'        => $name,
-						'slug'        => $slug,
-						'description' => $description,
-						'parent'      => $parent_id,
-					)
-				);
-				if ( is_array( $updated ) && isset( $updated['term_id'] ) ) {
-					$processed_term_ids[] = intval( $updated['term_id'] );
-				} else {
-					$processed_term_ids[] = intval( $existing->term_id );
-				}
-			} else {
-				$created = wp_insert_term(
-					$name,
-					'category',
-					array(
-						'slug'        => $slug,
-						'description' => $description,
-						'parent'      => $parent_id,
-					)
-				);
-				if ( is_array( $created ) && isset( $created['term_id'] ) ) {
-					$processed_term_ids[] = intval( $created['term_id'] );
-				}
-			}
-		}
-
-		$all_terms      = get_terms(
-			array(
-				'taxonomy'   => 'category',
-				'hide_empty' => false,
-			)
-		);
-		$default_cat_id = (int) get_option( 'default_category', 1 );
-		if ( is_array( $all_terms ) ) {
-			foreach ( $all_terms as $term ) {
-				if ( is_object( $term ) && ! in_array( intval( $term->term_id ), $processed_term_ids, true ) ) {
-					if ( intval( $term->term_id ) !== $default_cat_id && 'uncategorized' !== strtolower( $term->slug ) ) {
-						wp_delete_term( $term->term_id, 'category' );
-					}
-				}
-			}
-		}
-	}
-
-	private static function sync_tags_from_markdown( $markdown ) {
-		$data = self::parse_master_file_data( $markdown, 'tags' );
-		if ( ! is_array( $data ) ) {
-			return;
-		}
-
-		$processed_term_ids = array();
-
-		foreach ( $data as $item ) {
-			if ( ! is_array( $item ) || empty( $item['name'] ) ) {
-				continue;
-			}
-			$name        = (string) $item['name'];
-			$slug        = ! empty( $item['slug'] ) ? (string) $item['slug'] : sanitize_title( $name );
-			$description = isset( $item['description'] ) ? (string) $item['description'] : '';
-
-			$existing = false;
-			if ( ! empty( $item['id'] ) ) {
-				$existing = get_term( intval( $item['id'] ), 'post_tag' );
-				if ( is_wp_error( $existing ) || ! $existing ) {
-					$existing = false;
-				}
-			}
-			if ( ! $existing ) {
-				$existing = get_term_by( 'slug', $slug, 'post_tag' );
-			}
-			if ( ! $existing ) {
-				$existing = get_term_by( 'name', $name, 'post_tag' );
-			}
-
-			if ( $existing && ! is_wp_error( $existing ) ) {
-				$updated = wp_update_term(
-					$existing->term_id,
-					'post_tag',
-					array(
-						'name'        => $name,
-						'slug'        => $slug,
-						'description' => $description,
-					)
-				);
-				if ( is_array( $updated ) && isset( $updated['term_id'] ) ) {
-					$processed_term_ids[] = intval( $updated['term_id'] );
-				} else {
-					$processed_term_ids[] = intval( $existing->term_id );
-				}
-			} else {
-				$created = wp_insert_term(
-					$name,
-					'post_tag',
-					array(
-						'slug'        => $slug,
-						'description' => $description,
-					)
-				);
-				if ( is_array( $created ) && isset( $created['term_id'] ) ) {
-					$processed_term_ids[] = intval( $created['term_id'] );
-				}
-			}
-		}
-
-		$all_terms = get_terms(
-			array(
-				'taxonomy'   => 'post_tag',
-				'hide_empty' => false,
-			)
-		);
-		if ( is_array( $all_terms ) ) {
-			foreach ( $all_terms as $term ) {
-				if ( is_object( $term ) && ! in_array( intval( $term->term_id ), $processed_term_ids, true ) ) {
-					wp_delete_term( $term->term_id, 'post_tag' );
-				}
-			}
-		}
-	}
-
-	private static function sync_authors_from_markdown( $markdown ) {
-		$data = self::parse_master_file_data( $markdown, 'authors' );
-		if ( ! is_array( $data ) ) {
-			return;
-		}
-
-		foreach ( $data as $item ) {
-			if ( ! is_array( $item ) || empty( $item['user_login'] ) ) {
-				continue;
-			}
-			$login = (string) $item['user_login'];
-			$user  = get_user_by( 'login', $login );
-			if ( ! $user ) {
-				$user = get_user_by( 'slug', $login );
-			}
-			if ( ! $user ) {
-				continue;
-			}
-
-			$userdata = array(
-				'ID' => $user->ID,
-			);
-			if ( isset( $item['display_name'] ) ) {
-				$userdata['display_name'] = (string) $item['display_name'];
-			}
-			if ( isset( $item['first_name'] ) ) {
-				$userdata['first_name'] = (string) $item['first_name'];
-			}
-			if ( isset( $item['last_name'] ) ) {
-				$userdata['last_name'] = (string) $item['last_name'];
-			}
-			if ( isset( $item['user_email'] ) && is_email( $item['user_email'] ) ) {
-				$userdata['user_email'] = (string) $item['user_email'];
-			}
-			if ( isset( $item['description'] ) ) {
-				$userdata['description'] = (string) $item['description'];
-			}
-
-			wp_update_user( $userdata );
-
-			$extra_meta_keys = apply_filters( 'push_md_author_meta_keys', array(), $user );
-			if ( is_array( $extra_meta_keys ) ) {
-				foreach ( $extra_meta_keys as $meta_key ) {
-					$meta_key = (string) $meta_key;
-					if ( '' !== $meta_key && isset( $item[ $meta_key ] ) ) {
-						update_user_meta( $user->ID, $meta_key, $item[ $meta_key ] );
-					}
-				}
-			}
-
-			do_action( 'push_md_import_author', $user->ID, $item );
-		}
-	}
-
-	private static function parse_master_file_data( $markdown, $key ) {
-		self::assert_markdown_front_matter_is_closed( $markdown );
-		$lines = preg_split( "/\r\n|\n|\r/", $markdown );
-		if ( empty( $lines ) || '---' !== trim( $lines[0] ) ) {
-			return array();
-		}
-
-		$yaml_lines = array();
-		$count      = count( $lines );
-		for ( $i = 1; $i < $count; $i++ ) {
-			if ( '---' === trim( $lines[ $i ] ) ) {
-				break;
-			}
-			$yaml_lines[] = $lines[ $i ];
-		}
-
-		$items        = array();
-		$current_item = null;
-		$in_key       = false;
-
-		foreach ( $yaml_lines as $line ) {
-			$trimmed = trim( $line );
-			if ( '' === $trimmed ) {
-				continue;
-			}
-			if ( preg_match( '/^' . preg_quote( $key, '/' ) . '\s*:/', $trimmed ) ) {
-				$in_key = true;
-				continue;
-			}
-			if ( ! $in_key ) {
-				continue;
-			}
-
-			if ( preg_match( '/^\s*-\s*([A-Za-z0-9_]+)\s*:\s*(.*)$/', $line, $m ) ) {
-				if ( null !== $current_item ) {
-					$items[] = $current_item;
-				}
-				$current_item       = array();
-				$k                  = $m[1];
-				$v                  = trim( $m[2] );
-				$current_item[ $k ] = self::decode_yaml_value( $v );
-			} elseif ( null !== $current_item && preg_match( '/^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$/', $line, $m ) ) {
-				$k                  = $m[1];
-				$v                  = trim( $m[2] );
-				$current_item[ $k ] = self::decode_yaml_value( $v );
-			}
-		}
-
-		if ( null !== $current_item ) {
-			$items[] = $current_item;
-		}
-
-		return $items;
-	}
-
-	private static function decode_yaml_value( $val ) {
-		$val = trim( $val );
-		if ( '' === $val ) {
-			return '';
-		}
-		$len = strlen( $val );
-		if ( ( '"' === $val[0] && '"' === $val[ $len - 1 ] ) || ( "'" === $val[0] && "'" === $val[ $len - 1 ] ) ) {
-			$decoded = json_decode( $val, true );
-			if ( null !== $decoded ) {
-				return $decoded;
-			}
-
-			return trim( $val, "'\"" );
-		}
-
-		return $val;
-	}
-
-	private static function validate_post_frontmatter_references( $metadata, $post_type, $options = array(), $path = '' ) {
-		unset( $post_type );
-
-		if ( isset( $metadata['author'] ) && '' !== trim( (string) $metadata['author'] ) ) {
-			$author_id = self::resolve_frontmatter_author_id( $metadata['author'] );
-			if ( 0 === $author_id ) {
-				self::throw_push_rejection(
-					sprintf( 'author "%s" is incorrect or was not found in WordPress. Please refer to authors.md in your local repository for correct values.', esc_html( (string) $metadata['author'] ) ),
-					$path
-				);
-			}
-		}
-
-		if ( isset( $metadata['categories'] ) && ! empty( $metadata['categories'] ) ) {
-			$cat_list = self::parse_frontmatter_list( $metadata['categories'] );
-			foreach ( $cat_list as $cat_path ) {
-				if ( '' === $cat_path ) {
-					continue;
-				}
-				$term_id = self::resolve_category_path_to_term_id( $cat_path );
-				if ( 0 === $term_id ) {
-					self::throw_push_rejection(
-						sprintf( 'category "%s" is incorrect or was not found in categories.md or WordPress. Please refer to categories.md in your local repository for correct values.', esc_html( $cat_path ) ),
-						$path
-					);
-				}
-			}
-		}
-
-		if ( isset( $metadata['tags'] ) && ! empty( $metadata['tags'] ) ) {
-			$tag_list = self::parse_frontmatter_list( $metadata['tags'] );
-			foreach ( $tag_list as $tag_name ) {
-				if ( '' === $tag_name ) {
-					continue;
-				}
-				$term_id = self::resolve_tag_name_to_term_id( $tag_name );
-				if ( 0 === $term_id ) {
-					self::throw_push_rejection(
-						sprintf( 'tag "%s" is incorrect or was not found in tags.md or WordPress. Please refer to tags.md in your local repository for correct values.', esc_html( $tag_name ) ),
-						$path
-					);
-				}
-			}
-		}
-
-		if ( isset( $metadata['featured_image'] ) && '' !== trim( (string) $metadata['featured_image'] ) ) {
-			$img_id = self::resolve_featured_image_id( $metadata['featured_image'], $options );
-			if ( 0 === $img_id ) {
-				self::throw_push_rejection(
-					sprintf( 'featured image "%s" was not found in Media Library.', esc_html( (string) $metadata['featured_image'] ) ),
-					$path
-				);
-			}
-		}
-	}
-
-	private static function get_category_path_string( $term ) {
-		if ( ! $term || is_wp_error( $term ) ) {
-			return '';
-		}
-
-		$names     = array( $term->name );
-		$ancestors = get_ancestors( $term->term_id, 'category', 'taxonomy' );
-		if ( is_array( $ancestors ) ) {
-			foreach ( $ancestors as $ancestor_id ) {
-				$parent_term = get_term( $ancestor_id, 'category' );
-				if ( $parent_term && ! is_wp_error( $parent_term ) ) {
-					array_unshift( $names, $parent_term->name );
-				}
-			}
-		}
-
-		return implode( ' > ', $names );
-	}
-
-	private static function resolve_term_by_name_or_slug( $name_or_slug, $taxonomy, $parent_id = null ) {
-		$name_or_slug = trim( (string) $name_or_slug );
-		if ( '' === $name_or_slug ) {
-			return 0;
-		}
-
-		$term = get_term_by( 'name', $name_or_slug, $taxonomy );
-		if ( ! $term ) {
-			$term = get_term_by( 'slug', $name_or_slug, $taxonomy );
-		}
-		if ( $term && ! is_wp_error( $term ) ) {
-			if ( null === $parent_id || intval( $term->parent ) === intval( $parent_id ) ) {
-				return (int) $term->term_id;
-			}
-		}
-
-		$args = array(
-			'taxonomy'   => $taxonomy,
-			'hide_empty' => false,
-		);
-		if ( null !== $parent_id ) {
-			$args['parent'] = intval( $parent_id );
-		}
-
-		$terms = get_terms( $args );
-		if ( is_array( $terms ) ) {
-			foreach ( $terms as $t ) {
-				if ( 0 === strcasecmp( $t->name, $name_or_slug ) || 0 === strcasecmp( $t->slug, $name_or_slug ) ) {
-					return (int) $t->term_id;
-				}
-			}
-		}
-
-		return 0;
-	}
-
-	private static function resolve_category_path_to_term_id( $path_str ) {
-		$path_str = trim( (string) $path_str );
-		if ( '' === $path_str ) {
-			return 0;
-		}
-
-		$parts     = array_map( 'trim', explode( '>', $path_str ) );
-		$parent_id = 0;
-
-		foreach ( $parts as $part ) {
-			$term_id = self::resolve_term_by_name_or_slug( $part, 'category', $parent_id );
-			if ( 0 === $term_id ) {
-				$term_id = self::resolve_term_by_name_or_slug( $part, 'category' );
-			}
-			if ( 0 === $term_id ) {
-				return 0;
-			}
-			$parent_id = $term_id;
-		}
-
-		return $parent_id;
-	}
-
-	private static function resolve_tag_name_to_term_id( $tag_name ) {
-		return self::resolve_term_by_name_or_slug( $tag_name, 'post_tag' );
-	}
-
-	private static function resolve_frontmatter_author_id( $author_val ) {
-		$author_val = trim( (string) $author_val );
-		if ( '' === $author_val ) {
-			return 0;
-		}
-
-		$user = get_user_by( 'login', $author_val );
-		if ( ! $user ) {
-			$user = get_user_by( 'slug', $author_val );
-		}
-		if ( ! $user && is_numeric( $author_val ) ) {
-			$user = get_userdata( (int) $author_val );
-		}
-		if ( ! $user ) {
-			$users = get_users();
-			if ( is_array( $users ) ) {
-				foreach ( $users as $u ) {
-					if ( 0 === strcasecmp( $u->display_name, $author_val ) || 0 === strcasecmp( $u->user_login, $author_val ) ) {
-						return $u->ID;
-					}
-				}
-			}
-		}
-
-		return ( $user && ! is_wp_error( $user ) ) ? $user->ID : 0;
-	}
-
-	private static function resolve_featured_image_id( $img_val, $options = array() ) {
-		$img_val = trim( (string) $img_val );
-		if ( '' === $img_val ) {
-			return 0;
-		}
-
-		if ( is_numeric( $img_val ) ) {
-			$post = function_exists( 'get_post' ) ? get_post( (int) $img_val ) : null;
-			return ( $post && 'attachment' === $post->post_type ) ? (int) $img_val : 0;
-		}
-
-		if ( function_exists( 'attachment_url_to_postid' ) ) {
-			$attachment_id = attachment_url_to_postid( $img_val );
-			if ( $attachment_id ) {
-				return $attachment_id;
-			}
-		}
-
-		$clean_path = Push_MD_Media::normalize_relative_media_path( $img_val );
-		if ( '' !== $clean_path && Push_MD_Media::is_media_path( $clean_path ) ) {
-			$commit_files       = isset( $options['commit_files'] ) && is_array( $options['commit_files'] ) ? $options['commit_files'] : array();
-			$uploaded_media_map = isset( $options['uploaded_media_map'] ) && is_array( $options['uploaded_media_map'] ) ? $options['uploaded_media_map'] : array();
-
-			if ( is_array( $uploaded_media_map ) && isset( $uploaded_media_map[ $clean_path ]['id'] ) && $uploaded_media_map[ $clean_path ]['id'] > 0 ) {
-				return (int) $uploaded_media_map[ $clean_path ]['id'];
-			}
-
-			$fn = basename( $clean_path );
-			if ( isset( $commit_files[ $clean_path ] ) || isset( $commit_files[ 'media/' . $fn ] ) || isset( $commit_files[ $fn ] ) ) {
-				return -1;
-			}
-
-			foreach ( array_keys( $commit_files ) as $c_path ) {
-				if ( basename( $c_path ) === $fn ) {
-					return -1;
-				}
-			}
-
-			$existing_id = Push_MD_Media::find_existing_attachment_id_by_filename( $fn );
-			if ( $existing_id > 0 ) {
-				return $existing_id;
-			}
-		}
-
-		if ( 0 === strpos( $img_val, 'http://' ) || 0 === strpos( $img_val, 'https://' ) || 0 === strpos( $img_val, '//' ) ) {
-			return -1;
-		}
-
-		return 0;
-	}
-
-	private static function parse_frontmatter_list( $val ) {
-		if ( is_array( $val ) ) {
-			return array_map( 'trim', array_map( 'strval', $val ) );
-		}
-
-		$val = trim( (string) $val );
-		if ( '' === $val ) {
-			return array();
-		}
-
-		if ( 0 === strpos( $val, '[' ) && ']' === substr( $val, -1 ) ) {
-			$decoded = json_decode( $val, true );
-			if ( is_array( $decoded ) ) {
-				return array_map( 'trim', array_map( 'strval', $decoded ) );
-			}
-		}
-
-		return array_map( 'trim', explode( ',', $val ) );
-	}
-
-	private static function assign_post_categories( $post_id, $categories_val ) {
-		$cat_list = self::parse_frontmatter_list( $categories_val );
-		$term_ids = array();
-		foreach ( $cat_list as $cat_path ) {
-			if ( '' === $cat_path ) {
-				continue;
-			}
-			$term_id = self::resolve_category_path_to_term_id( $cat_path );
-			if ( $term_id > 0 ) {
-				$term_ids[] = $term_id;
-			}
-		}
-		wp_set_object_terms( $post_id, array_unique( $term_ids ), 'category' );
-	}
-
-	private static function assign_post_tags( $post_id, $tags_val ) {
-		$tag_list = self::parse_frontmatter_list( $tags_val );
-		wp_set_post_tags( $post_id, $tag_list, false );
 	}
 
 	private static function assign_post_featured_image( $post_id, $img_val, $options = array() ) {

@@ -118,8 +118,8 @@ class Push_MD_Markdown_Consumer {
 			if ( 1 === $i % 2 ) {
 				continue;
 			}
-			$sub_part      = str_replace( '<', '&lt;', $sub_part );
-			$sub_part      = str_replace( '>', '&gt;', $sub_part );
+			$sub_part        = str_replace( '<', '&lt;', $sub_part );
+			$sub_part        = str_replace( '>', '&gt;', $sub_part );
 			$sub_parts[ $i ] = $sub_part;
 		}
 
