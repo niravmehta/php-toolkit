@@ -802,6 +802,7 @@ class Push_MD_Media {
 				'post_type'      => 'attachment',
 				'post_status'    => 'inherit',
 				'posts_per_page' => -1,
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query
 				'meta_query'     => array(
 					array(
 						'key'     => '_wp_attached_file',
@@ -832,6 +833,7 @@ class Push_MD_Media {
 						'post_type'      => 'attachment',
 						'post_status'    => 'inherit',
 						'posts_per_page' => -1,
+						// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query
 						'meta_query'     => array(
 							array(
 								'key'     => '_wp_attached_file',
