@@ -645,8 +645,9 @@ class FrontmatterTest extends TestCase {
 	}
 
 	private function invoke_private( $method, $args = array() ) {
-		$reflection = new ReflectionClass( Push_MD_Plugin::class );
-		$m          = $reflection->getMethod( $method );
+		$target_class = method_exists( Push_MD_Master_Metadata::class, $method ) ? Push_MD_Master_Metadata::class : Push_MD_Plugin::class;
+		$reflection   = new ReflectionClass( $target_class );
+		$m            = $reflection->getMethod( $method );
 		if ( PHP_VERSION_ID < 80100 ) {
 			$m->setAccessible( true );
 		}

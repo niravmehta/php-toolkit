@@ -460,9 +460,9 @@ class Push_MD_HTML_Converter {
 						if ( empty( $link_stack ) ) {
 							break;
 						}
-						$link_data = array_pop( $link_stack );
-						$href      = $link_data['href'];
-						$start_len = $link_data['start_len'];
+						$link_data     = array_pop( $link_stack );
+						$href          = $link_data['href'];
+						$start_len     = $link_data['start_len'];
 						$link_text_len = strlen( $output ) - $start_len;
 						$link_text     = $link_text_len > 0 ? substr( $output, -$link_text_len ) : '';
 
