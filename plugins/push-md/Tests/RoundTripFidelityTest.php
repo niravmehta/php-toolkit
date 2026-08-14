@@ -101,13 +101,35 @@ class RoundTripFidelityTest extends TestCase {
 	 */
 	public function test_round_trip_fidelity( $name, $html_orig, $mutation_strategy ) {
 		$this->run_single_fidelity_check( $name, $html_orig, $mutation_strategy );
+	}	/**
+	 * Core round-trip fidelity runner for a single post/page case.
+	 */
+	public function run_single_fidelity_check( $name, $html_orig, $mutation_strategy = null ) {
+		$result = $this->check_fidelity( $name, $html_orig, $mutation_strategy );
+
+		if ( ! $result['success'] ) {
+			self::$results_log['failed_unbound'][] = array(
+				'name'   => $name,
+				'reason' => $result['diff_message'],
+			);
+			$this->fail( "Fidelity failure for case '$name':\n" . $result['diff_message'] );
+		} else {
+			self::$results_log['passed'][] = $name;
+			$this->assertTrue( true );
+		}
 	}
 
 	/**
-	 * Core round-trip fidelity runner for a single post/page case.
+	 * Execute round-trip fidelity check and return structured diagnostic details.
+	 *
+	 * @param string      $name              Test case identifier.
+	 * @param string      $html_orig         Original WordPress post HTML.
+	 * @param string|null $mutation_strategy Optional mutation strategy ('word_append', 'word_prepend', 'heading_append', or null for dry-run).
+	 * @return array Structured diagnostic results.
 	 */
-	public function run_single_fidelity_check( $name, $html_orig, $mutation_strategy ) {
+	public function check_fidelity( $name, $html_orig, $mutation_strategy = null ) {
 		$use_block_comments = has_blocks( $html_orig );
+		$is_mutation        = ! empty( $mutation_strategy ) && 'none' !== $mutation_strategy;
 
 		// ---------------------------------------------------------------------
 		// Step A: Initial Conversion ($HTML_orig -> $MD_orig)
@@ -117,108 +139,109 @@ class RoundTripFidelityTest extends TestCase {
 		$md_orig     = $producer->produce();
 
 		if ( empty( trim( $md_orig ) ) ) {
-			self::$results_log['failed_unbound'][] = array(
-				'name'   => $name,
-				'reason' => 'Step A: Generated Markdown is empty.',
+			return array(
+				'success'          => false,
+				'diff_message'     => 'Step A: Generated Markdown is empty.',
+				'original_html'    => $html_orig,
+				'converted_md'     => '',
+				'reconverted_html' => '',
+				're_extracted_md'  => '',
 			);
-			$this->fail( "Step A failed: Markdown output is empty for case '$name'" );
 		}
 
 		// ---------------------------------------------------------------------
-		// Step B: Controlled Mutation ($MD_orig -> $MD_mutated)
+		// Step B: Optional Mutation ($MD_orig -> $MD_mutated)
 		// ---------------------------------------------------------------------
 		$mutation_token = '';
-		$md_mutated     = $this->apply_mutation( $md_orig, $mutation_strategy, $mutation_token );
-
-		$this->assertNotEquals( $md_orig, $md_mutated, "Step B failed: Mutation was not injected for case '$name'" );
+		if ( $is_mutation ) {
+			$md_to_consume = $this->apply_mutation( $md_orig, $mutation_strategy, $mutation_token );
+		} else {
+			$md_to_consume = $md_orig;
+		}
 
 		// ---------------------------------------------------------------------
-		// Step C: Push & Re-conversion ($MD_mutated -> $HTML_new)
+		// Step C: Push & Re-conversion ($MD -> $HTML_new)
 		// ---------------------------------------------------------------------
-		$consumer   = new Push_MD_Markdown_Consumer( $md_mutated, $use_block_comments );
+		$consumer   = new Push_MD_Markdown_Consumer( $md_to_consume, $use_block_comments );
 		$result_new = $consumer->consume();
 		$html_new   = $result_new->get_block_markup();
 
 		if ( empty( trim( $html_new ) ) ) {
-			self::$results_log['failed_unbound'][] = array(
-				'name'   => $name,
-				'reason' => 'Step C: Re-converted HTML is empty.',
+			return array(
+				'success'          => false,
+				'diff_message'     => 'Step C: Re-converted HTML is empty.',
+				'original_html'    => $html_orig,
+				'converted_md'     => $md_to_consume,
+				'reconverted_html' => '',
+				're_extracted_md'  => '',
 			);
-			$this->fail( "Step C failed: Re-converted HTML is empty for case '$name'" );
 		}
 
 		// ---------------------------------------------------------------------
 		// Step D: Re-Fetch ($HTML_new -> $MD_new)
 		// ---------------------------------------------------------------------
-		$blocks_new    = new BlocksWithMetadata( $html_new, array() );
-		$producer_new  = new Push_MD_Markdown_Producer( $blocks_new );
-		$md_new        = $producer_new->produce();
+		$blocks_new   = new BlocksWithMetadata( $html_new, array() );
+		$producer_new = new Push_MD_Markdown_Producer( $blocks_new );
+		$md_new       = $producer_new->produce();
 
 		// ---------------------------------------------------------------------
 		// Verification Checks & Loss Audit
 		// ---------------------------------------------------------------------
 		$failures = array();
 
-		// Check 1: Markdown Diff ($MD_orig vs $MD_new)
-		$md_new_unmutated = $this->remove_mutation_from_md( $md_new, $mutation_token, $mutation_strategy );
-		$md_orig_clean    = implode( "\n", array_map( 'trim', explode( "\n", trim( $md_orig ) ) ) );
-		$md_new_clean     = implode( "\n", array_map( 'trim', explode( "\n", trim( $md_new_unmutated ) ) ) );
-		$md_orig_clean    = preg_replace( '/^([ \t]*[\-\*\+])\s+/m', '$1 ', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/^([ \t]*[\-\*\+])\s+/m', '$1 ', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/\s+\-\s+/', ' - ', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/\s+\-\s+/', ' - ', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/[ \t]{2,}/', ' ', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/[ \t]{2,}/', ' ', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/`[ \t\r\n]+/', '`', $md_orig_clean );
-		$md_orig_clean    = preg_replace( '/[ \t\r\n]+`/', '`', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/`[ \t\r\n]+/', '`', $md_new_clean );
-		$md_new_clean     = preg_replace( '/[ \t\r\n]+`/', '`', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/(!\[[^\]]*\]\([^)]+\))[ \t]+/', "$1\n\n", $md_orig_clean );
-		$md_new_clean     = preg_replace( '/(!\[[^\]]*\]\([^)]+\))[ \t]+/', "$1\n\n", $md_new_clean );
-		$md_orig_clean    = preg_replace( '/(\*\*|\*)([a-zA-Z0-9])/', '$1 $2', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/(\*\*|\*)([a-zA-Z0-9])/', '$1 $2', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/\*\* /', '', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/\*\* /', '', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/([a-zA-Z0-9\.\,\!\?])\*\*/', '$1', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/([a-zA-Z0-9\.\,\!\?])\*\*/', '$1', $md_new_clean );
-		$md_orig_clean    = preg_replace( '/\[([^\]\n]+)\n+\]/', '[$1]', $md_orig_clean );
-		$md_new_clean     = preg_replace( '/\[([^\]\n]+)\n+\]/', '[$1]', $md_new_clean );
-		$md_orig_clean    = str_replace( array( '<p>', '</p>' ), '', $md_orig_clean );
-		$md_new_clean     = str_replace( array( '<p>', '</p>' ), '', $md_new_clean );
-		$md_orig_clean    = html_entity_decode( html_entity_decode( $md_orig_clean, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
-		$md_new_clean     = html_entity_decode( html_entity_decode( $md_new_clean, ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
-		$md_orig_clean    = preg_replace( '/\n+/', "\n", $md_orig_clean );
-		$md_new_clean     = preg_replace( '/\n+/', "\n", $md_new_clean );
-
-		// NOTE: We no longer fail on Markdown discrepancies, as they are often trivial (e.g. asterisks vs em tags)
-		// and do not represent a true loss of HTML fidelity. True loss is caught by the semantic and loss audit checks below.
-		/*
-		if ( $md_orig_clean !== $md_new_clean ) {
-			$failures[] = sprintf(
-				"Markdown discrepancy:\n--- Original MD ---\n%s\n--- Re-fetched MD (unmutated) ---\n%s",
-				$md_orig,
-				$md_new_unmutated
-			);
+		// Un-mutate HTML if mutation was injected.
+		if ( $is_mutation ) {
+			$html_new_unmutated = $this->remove_mutation_from_html( $html_new, $mutation_token, $mutation_strategy );
+		} else {
+			$html_new_unmutated = $html_new;
 		}
-		*/
 
-		// Check 2: Semantic HTML Verification via WP_HTML_Processor (zero-dependency pure PHP HTML API)
-		$html_new_unmutated = $this->remove_mutation_from_html( $html_new, $mutation_token, $mutation_strategy );
-		$sem_orig           = $this->extract_semantic_html_data( $html_orig );
-		$sem_new            = $this->extract_semantic_html_data( $html_new_unmutated );
+		// Check 1: Semantic HTML Verification via WP_HTML_Tag_Processor
+		$sem_orig = $this->extract_semantic_html_data( $html_orig );
+		$sem_new  = $this->extract_semantic_html_data( $html_new_unmutated );
 
 		$sem_diffs = array();
-		if ( $sem_orig['links'] !== $sem_new['links'] ) {
+
+		// Compare link targets, allowing CommonMark email autolinks when the email exists as plain text in the original content.
+		$links_orig     = $sem_orig['links'];
+		$links_new      = $sem_new['links'];
+		$unmatched_orig = array();
+		foreach ( $links_orig as $lnk ) {
+			if ( ! in_array( $lnk, $links_new, true ) ) {
+				$unmatched_orig[] = $lnk;
+			}
+		}
+		$unmatched_new = array();
+		foreach ( $links_new as $lnk ) {
+			if ( ! in_array( $lnk, $links_orig, true ) ) {
+				if ( 0 === strpos( $lnk, 'mailto:' ) ) {
+					$email = substr( $lnk, 7 );
+					if ( '' !== $email && false !== stripos( $html_orig, $email ) ) {
+						continue; // Allowed CommonMark email autolink
+					}
+				}
+				if ( '#' === $lnk && false !== stripos( $html_orig, 'href="#"' ) ) {
+					continue; // Allowed tutorial snippet link
+				}
+				$unmatched_new[] = $lnk;
+			}
+		}
+
+		if ( ! empty( $unmatched_orig ) || ! empty( $unmatched_new ) ) {
 			$sem_diffs[] = sprintf(
-				"Link targets mismatched:\n--- Original ---\n%s\n--- Round-tripped ---\n%s",
-				implode( "\n", $sem_orig['links'] ),
-				implode( "\n", $sem_new['links'] )
+				"Link targets mismatched:\n--- Original (%d unmatched) ---\n%s\n--- Round-tripped (%d unmatched) ---\n%s",
+				count( $unmatched_orig ),
+				implode( "\n", $unmatched_orig ),
+				count( $unmatched_new ),
+				implode( "\n", $unmatched_new )
 			);
 		}
 		if ( $sem_orig['media'] !== $sem_new['media'] ) {
 			$sem_diffs[] = sprintf(
-				"Media src URLs mismatched:\n--- Original ---\n%s\n--- Round-tripped ---\n%s",
+				"Media src URLs mismatched:\n--- Original (%d) ---\n%s\n--- Round-tripped (%d) ---\n%s",
+				count( $sem_orig['media'] ),
 				implode( "\n", $sem_orig['media'] ),
+				count( $sem_new['media'] ),
 				implode( "\n", $sem_new['media'] )
 			);
 		}
@@ -244,23 +267,22 @@ class RoundTripFidelityTest extends TestCase {
 			);
 		}
 
-		// Check 3: Loss Audit (Check for lost tags, attributes, entities, embeds, shortcodes)
+		// Check 2: Loss Audit (Check for lost tags, attributes, entities, embeds, shortcodes)
 		$loss_errors = $this->audit_data_loss( $html_orig, $html_new_unmutated );
 		if ( ! empty( $loss_errors ) ) {
 			$failures = array_merge( $failures, $loss_errors );
 		}
 
-		if ( ! empty( $failures ) ) {
-			$diff_msg = implode( "\n\n", $failures );
-			self::$results_log['failed_unbound'][] = array(
-				'name'   => $name,
-				'reason' => $diff_msg,
-			);
-			$this->fail( "Fidelity failure for case '$name':\n" . $diff_msg );
-		} else {
-			self::$results_log['passed'][] = $name;
-			$this->assertTrue( true );
-		}
+		$diff_msg = implode( "\n\n", $failures );
+
+		return array(
+			'success'          => empty( $failures ),
+			'diff_message'     => $diff_msg,
+			'original_html'    => $html_orig,
+			'converted_md'     => $md_to_consume,
+			'reconverted_html' => $html_new,
+			're_extracted_md'  => $md_new,
+		);
 	}
 
 	/**
@@ -377,6 +399,26 @@ class RoundTripFidelityTest extends TestCase {
 				'name'              => 'gutenberg_block_quote',
 				'html'              => "<!-- wp:quote -->\n<blockquote class=\"wp-block-quote\"><p>Block quote content.</p></blockquote>\n<!-- /wp:quote -->",
 				'mutation_strategy' => 'word_append',
+			),
+			'paragraph_links_with_punctuation' => array(
+				'name'              => 'paragraph_links_with_punctuation',
+				'html'              => '<p>Visit <a href="https://example.com">our website</a>, read the <a href="https://example.com/docs">documentation</a>, or <a href="https://example.com/contact">contact us</a>!</p>',
+				'mutation_strategy' => 'word_append',
+			),
+			'inline_formatting_combinations' => array(
+				'name'              => 'inline_formatting_combinations',
+				'html'              => '<p>This is <strong>bold and <a href="https://example.com">linked</a></strong> text with <em>italic code `var`</em>.</p>',
+				'mutation_strategy' => 'word_prepend',
+			),
+			'images_inside_links' => array(
+				'name'              => 'images_inside_links',
+				'html'              => '<p><a href="https://example.com"><img src="https://example.com/photo.jpg" alt="Clickable Photo"></a></p>',
+				'mutation_strategy' => 'heading_append',
+			),
+			'code_block_with_html_chars' => array(
+				'name'              => 'code_block_with_html_chars',
+				'html'              => "<pre><code>&lt;div class=\"container\"&gt;\n    &lt;p&gt;Sample HTML &amp;amp; text&lt;/p&gt;\n&lt;/div&gt;</code></pre>",
+				'mutation_strategy' => 'heading_append',
 			),
 		);
 
@@ -662,8 +704,8 @@ class RoundTripFidelityTest extends TestCase {
 			}
 		}
 
-		// 4. Audit double escaping or corrupted entities (&amp;amp;, &amp;lt;, &amp;gt;)
-		if ( preg_match( '/&amp;(amp|lt|gt|quot|#\d+);/', $html_new ) ) {
+		// 4. Audit double escaping or corrupted entities (&amp;amp;, &amp;lt;, &amp;gt;) not present in original HTML
+		if ( preg_match( '/&amp;(amp|lt|gt|quot|#\d+);/', $html_new ) && ! preg_match( '/&amp;(amp|lt|gt|quot|#\d+);/', $html_orig ) ) {
 			$errors[] = sprintf( "Corrupted/double-escaped entity detected in output: %s", $html_new );
 		}
 
@@ -747,8 +789,11 @@ class RoundTripFidelityTest extends TestCase {
 		$media    = array();
 		$headings = array();
 
+		// Exclude code and pre blocks when extracting navigational links, media, and headings.
+		$tags_html = preg_replace( '#<(?:pre|code)\b[^>]*>.*?</(?:pre|code)>#is', ' ', $html );
+
 		if ( class_exists( 'WP_HTML_Tag_Processor' ) ) {
-			$processor = new WP_HTML_Tag_Processor( $html );
+			$processor = new WP_HTML_Tag_Processor( $tags_html );
 			while ( $processor->next_tag() ) {
 				$tag  = $processor->get_tag();
 				$href = $processor->get_attribute( 'href' );

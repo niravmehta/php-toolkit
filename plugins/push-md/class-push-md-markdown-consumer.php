@@ -69,6 +69,7 @@ class Push_MD_Markdown_Consumer {
 		$block_markup = $this->escape_literal_angle_brackets( $block_markup );
 		$block_markup = $this->unescape_inline_html_tags( $block_markup );
 		$block_markup = $this->encode_bare_ampersands( $block_markup );
+		$block_markup = $this->normalize_link_spacing_and_linebreaks( $block_markup );
 
 		$metadata     = $raw_result->get_all_metadata();
 		$this->result = new BlocksWithMetadata( $block_markup, $metadata );
@@ -84,23 +85,45 @@ class Push_MD_Markdown_Consumer {
 	 */
 	private function escape_literal_angle_brackets( $markup ) {
 		$tags  = 'p|h[1-6]|ul|ol|li|blockquote|figure|figcaption|aside|table|thead|tbody|tfoot|tr|th|td|hr|div|pre|code|span|a|b|i|strong|em|img|svg|canvas|sub|sup|del|s|section|article|header|footer|nav|main';
-		$parts = preg_split( '/(<!--.*?-->|<\/?(?:' . $tags . ')\b[^>]*>)/s', $markup, -1, PREG_SPLIT_DELIM_CAPTURE );
+		$parts = preg_split( '#(<(?:code|pre|script|style|textarea)\b[^>]*>.*?</(?:code|pre|script|style|textarea)>)#is', $markup, -1, PREG_SPLIT_DELIM_CAPTURE );
 		if ( false === $parts || 1 === count( $parts ) ) {
-			return $markup;
+			return $this->escape_literal_angle_brackets_in_fragment( $markup, $tags );
 		}
 
 		foreach ( $parts as $i => $part ) {
-			// Odd parts are HTML tags or comments (delimiter capture).
+			// Odd parts are protected code/pre containers.
 			if ( 1 === $i % 2 ) {
 				continue;
 			}
-			// Escape literal < and > in text segments.
-			$part        = str_replace( '<', '&lt;', $part );
-			$part        = str_replace( '>', '&gt;', $part );
-			$parts[ $i ] = $part;
+			$parts[ $i ] = $this->escape_literal_angle_brackets_in_fragment( $part, $tags );
 		}
 
 		return implode( '', $parts );
+	}
+
+	/**
+	 * Helper to escape literal < and > outside HTML tags within a fragment.
+	 *
+	 * @param string $fragment Text fragment outside protected code/pre blocks.
+	 * @param string $tags     Regex tag list.
+	 * @return string Fragment with literal < and > escaped.
+	 */
+	private function escape_literal_angle_brackets_in_fragment( $fragment, $tags ) {
+		$sub_parts = preg_split( '/(<!--.*?-->|<\/?(?:' . $tags . ')\b[^>]*>)/s', $fragment, -1, PREG_SPLIT_DELIM_CAPTURE );
+		if ( false === $sub_parts || 1 === count( $sub_parts ) ) {
+			return $fragment;
+		}
+
+		foreach ( $sub_parts as $i => $sub_part ) {
+			if ( 1 === $i % 2 ) {
+				continue;
+			}
+			$sub_part      = str_replace( '<', '&lt;', $sub_part );
+			$sub_part      = str_replace( '>', '&gt;', $sub_part );
+			$sub_parts[ $i ] = $sub_part;
+		}
+
+		return implode( '', $sub_parts );
 	}
 
 	/**
@@ -173,10 +196,36 @@ class Push_MD_Markdown_Consumer {
 		$markup = preg_replace( '/<!--\s+\/?wp:[^>]+-->\n?/', '', $markup );
 		// Remove wp-specific CSS classes that only make sense in the block editor.
 		$markup = preg_replace( '/ class="wp-block-[^"]*"/', '', $markup );
+		// Remove auto-generated id attributes on heading tags.
+		$markup = preg_replace( '/(<h[1-6]\b[^>]*) id="[^"]*"/i', '$1', $markup );
 		// Normalise empty paragraphs left by block conversion boundaries.
 		$markup = preg_replace( '#<p>\s*</p>#', '', $markup );
 		// Normalise excess blank lines left by the removal.
 		$markup = preg_replace( "/\n{3,}/", "\n\n", $markup );
 		return trim( $markup );
+	}
+
+	/**
+	 * Normalize link boundary spacing and strip accidental line breaks after </a> tags.
+	 *
+	 * Preserves word boundaries and spaces around links while ensuring punctuation
+	 * (periods, commas, etc.) and media/image elements are not corrupted.
+	 *
+	 * @param string $markup Output markup.
+	 * @return string Markup with clean link spacing.
+	 */
+	private function normalize_link_spacing_and_linebreaks( $markup ) {
+		// Replace linebreaks directly after </a> tags with a single space when followed by text.
+		$markup = preg_replace( '/(<\/a>)\s*[\r\n]+\s*([a-zA-Z0-9])/i', '$1 $2', $markup );
+		// Replace linebreaks directly before <a href=...> tags with a single space when preceded by text.
+		$markup = preg_replace( '/([a-zA-Z0-9])\s*[\r\n]+\s*(<a\b[^>]*>)/i', '$1 $2', $markup );
+
+		// Ensure space before <a href="..."> if preceded directly by a word character without space.
+		$markup = preg_replace( '/([a-zA-Z0-9])(<a\b[^>]*>)/i', '$1 $2', $markup );
+
+		// Ensure space after </a> if followed directly by a word character without space (excluding punctuation).
+		$markup = preg_replace( '/(<\/a>)([a-zA-Z0-9])/i', '$1 $2', $markup );
+
+		return $markup;
 	}
 }

@@ -46,9 +46,59 @@ if ( ! function_exists( 'taxonomy_exists' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_post' ) ) {
+	function get_post( $post_id ) {
+		$post_id = intval( $post_id );
+		if ( isset( $GLOBALS['mock_wp_posts'][ $post_id ] ) ) {
+			return $GLOBALS['mock_wp_posts'][ $post_id ];
+		}
+
+		return null;
+	}
+}
+
+if ( ! function_exists( 'get_posts' ) ) {
+	function get_posts( $args = array() ) {
+		$posts   = isset( $GLOBALS['mock_wp_posts'] ) && is_array( $GLOBALS['mock_wp_posts'] ) ? $GLOBALS['mock_wp_posts'] : array();
+		$results = array();
+		foreach ( $posts as $post ) {
+			if ( isset( $args['post_type'] ) && $post->post_type !== $args['post_type'] ) {
+				continue;
+			}
+			if ( isset( $args['name'] ) && $post->post_name !== $args['name'] ) {
+				continue;
+			}
+			if ( isset( $args['post_parent'] ) && intval( $post->post_parent ) !== intval( $args['post_parent'] ) ) {
+				continue;
+			}
+			if ( isset( $args['post_status'] ) ) {
+				$statuses = is_array( $args['post_status'] ) ? $args['post_status'] : array( $args['post_status'] );
+				if ( ! in_array( $post->post_status, $statuses, true ) ) {
+					continue;
+				}
+			}
+			if ( isset( $args['exclude'] ) && is_array( $args['exclude'] ) && in_array( intval( $post->ID ), $args['exclude'], true ) ) {
+				continue;
+			}
+			if ( ! empty( $args['fields'] ) && 'ids' === $args['fields'] ) {
+				$results[] = $post->ID;
+			} else {
+				$results[] = $post;
+			}
+		}
+
+		return $results;
+	}
+}
+
 require_once dirname( __DIR__ ) . '/class-push-md-plugin.php';
 
 class PMD_Export_Path_Test extends TestCase {
+
+	/** @before */
+	public function reset_mock_posts() {
+		$GLOBALS['mock_wp_posts'] = array();
+	}
 
 	public function testPostWithEmptySlugUsesStableIdFallbackPath() {
 		$this->assertSame(
@@ -93,9 +143,12 @@ class PMD_Export_Path_Test extends TestCase {
 		$this->expectException( Exception::class );
 		$this->expectExceptionMessage( 'fallback filename is stale' );
 
+		$post = $this->post( 4937, 'post', 'test-post-from-cli' );
+		$GLOBALS['mock_wp_posts'][ $post->ID ] = $post;
+
 		$this->assert_id_fallback_path_is_current(
 			'post/post-4937.md',
-			$this->post( 4937, 'post', 'test-post-from-cli' )
+			$post
 		);
 	}
 
@@ -125,6 +178,59 @@ class PMD_Export_Path_Test extends TestCase {
 		$this->assertSame( 'post/post-202.md', $fallback_path2 );
 	}
 
+	public function testDuplicateDraftSlugsFallbackPathIsAccepted() {
+		$post1              = $this->post( 101, 'post', 'sendgrid-alternatives-2' );
+		$post1->post_status = 'draft';
+		$post2              = $this->post( 202, 'post', 'sendgrid-alternatives-2' );
+		$post2->post_status = 'draft';
+
+		$GLOBALS['mock_wp_posts'][ $post1->ID ] = $post1;
+		$GLOBALS['mock_wp_posts'][ $post2->ID ] = $post2;
+
+		$this->assertTrue(
+			$this->assert_id_fallback_path_is_current(
+				'post/post-202.md',
+				$post2
+			)
+		);
+	}
+
+	public function testDraftCollidingWithPublishedSlugFallbackPathIsAccepted() {
+		$published_post              = $this->post( 101, 'post', 'sendgrid-alternatives' );
+		$published_post->post_status = 'publish';
+		$draft_post                  = $this->post( 202, 'post', 'sendgrid-alternatives' );
+		$draft_post->post_status     = 'draft';
+
+		$GLOBALS['mock_wp_posts'][ $published_post->ID ] = $published_post;
+		$GLOBALS['mock_wp_posts'][ $draft_post->ID ]     = $draft_post;
+
+		$this->assertTrue(
+			$this->assert_id_fallback_path_is_current(
+				'post/post-202.md',
+				$draft_post
+			)
+		);
+	}
+
+	public function testPublicSlugCollisionIsRejected() {
+		$published_post              = $this->post( 101, 'post', 'sendgrid-alternatives' );
+		$published_post->post_status = 'publish';
+		$draft_post                  = $this->post( 202, 'post', 'sendgrid-alternatives' );
+		$draft_post->post_status     = 'draft';
+
+		$GLOBALS['mock_wp_posts'][ $published_post->ID ] = $published_post;
+		$GLOBALS['mock_wp_posts'][ $draft_post->ID ]     = $draft_post;
+
+		$this->expectException( Exception::class );
+		$this->expectExceptionMessage( 'Push rejected because a published WordPress post already uses the slug "sendgrid-alternatives"' );
+
+		$method = new ReflectionMethod( Push_MD_Plugin::class, 'assert_no_public_slug_collision' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
+		$method->invoke( null, 'post', 'sendgrid-alternatives', $draft_post );
+	}
+
 	private function post( $id, $post_type, $post_name ) {
 		$post              = new WP_Post();
 		$post->ID          = $id;
@@ -137,7 +243,9 @@ class PMD_Export_Path_Test extends TestCase {
 
 	private function assert_id_fallback_path_is_current( $path, WP_Post $post ) {
 		$method = new ReflectionMethod( Push_MD_Plugin::class, 'assert_id_fallback_path_is_current' );
-		$method->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
 		$method->invoke( null, $path, $post );
 
 		return true;
@@ -145,7 +253,9 @@ class PMD_Export_Path_Test extends TestCase {
 
 	private function is_current_slugless_fallback_path( $path, WP_Post $post ) {
 		$method = new ReflectionMethod( Push_MD_Plugin::class, 'is_current_slugless_fallback_path' );
-		$method->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$method->setAccessible( true );
+		}
 
 		return $method->invoke( null, $path, $post );
 	}
