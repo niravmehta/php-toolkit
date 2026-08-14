@@ -5,7 +5,7 @@ services:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: wp
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot", "--silent"]
+      test: [ "CMD", "mysqladmin", "ping", "-uroot", "-proot", "--silent" ]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -29,6 +29,7 @@ services:
       - ../../..:/srv/php-toolkit:ro
       - wp:/var/www/html
       - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ../../../../icon-helper:/var/www/html/wp-content/plugins/icon-helper:ro
 
   init:
     image: wordpress:cli-php8.2
@@ -49,7 +50,7 @@ services:
       - ../../..:/srv/php-toolkit:ro
       - ./init.sh:/init.sh:ro
       - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
-    entrypoint: ["bash", "/init.sh"]
+    entrypoint: [ "bash", "/init.sh" ]
     restart: "no"
 
 volumes:

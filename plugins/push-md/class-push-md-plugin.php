@@ -58,7 +58,7 @@ class Push_MD_Plugin {
 	const BRANCH_QUERY_PARAM           = 'branch';
 
 	public static $supported_post_types    = array( 'post', 'page' );
-	public static $supported_post_statuses = array( 'publish', 'draft', 'pending', 'private', 'future' );
+	public static $supported_post_statuses = array( 'publish', 'private', 'future', 'pending', 'draft' );
 
 	private static $raw_block_post_types = array( 'wp_template', 'wp_template_part', 'wp_navigation' );
 
@@ -1525,26 +1525,7 @@ class Push_MD_Plugin {
 			)
 		);
 
-		usort(
-			$posts,
-			function ( $a, $b ) {
-				$status_order = array(
-					'publish' => 1,
-					'private' => 2,
-					'future'  => 3,
-					'pending' => 4,
-					'draft'   => 5,
-				);
-				$a_order      = isset( $status_order[ $a->post_status ] ) ? $status_order[ $a->post_status ] : 10;
-				$b_order      = isset( $status_order[ $b->post_status ] ) ? $status_order[ $b->post_status ] : 10;
-
-				if ( $a_order !== $b_order ) {
-					return $a_order - $b_order;
-				}
-
-				return intval( $a->ID ) - intval( $b->ID );
-			}
-		);
+		usort( $posts, array( __CLASS__, 'compare_post_precedence' ) );
 
 		$files                  = array();
 		$has_knowledge_skills   = false;
@@ -1971,12 +1952,71 @@ class Push_MD_Plugin {
 		return (bool) self::get_id_from_fallback_slug( $post_type, self::path_to_slug( $path ) );
 	}
 
+	private static function compare_post_precedence( WP_Post $a, WP_Post $b ) {
+		$a_order = array_search( $a->post_status, self::$supported_post_statuses, true );
+		$b_order = array_search( $b->post_status, self::$supported_post_statuses, true );
+		$a_order = false !== $a_order ? $a_order : 99;
+		$b_order = false !== $b_order ? $b_order : 99;
+
+		if ( $a_order !== $b_order ) {
+			return $a_order - $b_order;
+		}
+
+		return intval( $a->ID ) - intval( $b->ID );
+	}
+
+	private static function is_public_post_status( $status ) {
+		if ( function_exists( 'is_post_status_viewable' ) ) {
+			return is_post_status_viewable( $status );
+		}
+		if ( function_exists( 'get_post_status_object' ) ) {
+			$status_obj = get_post_status_object( $status );
+			if ( $status_obj ) {
+				return ! empty( $status_obj->public );
+			}
+		}
+
+		return in_array( $status, array( 'publish', 'future' ), true );
+	}
+
+	private static function is_post_export_path_colliding( WP_Post $post ) {
+		if ( '' === $post->post_name ) {
+			return false;
+		}
+
+		$statuses = array_merge( self::$supported_post_statuses, array( 'trash' ) );
+		$args     = array(
+			'post_type'      => $post->post_type,
+			'name'           => $post->post_name,
+			'post_status'    => $statuses,
+			'posts_per_page' => -1,
+		);
+		if ( 'page' === $post->post_type ) {
+			$args['post_parent'] = intval( $post->post_parent );
+		}
+
+		$matching_posts = get_posts( $args );
+		if ( empty( $matching_posts ) || count( $matching_posts ) <= 1 ) {
+			return false;
+		}
+
+		usort( $matching_posts, array( __CLASS__, 'compare_post_precedence' ) );
+
+		return intval( $matching_posts[0]->ID ) !== intval( $post->ID );
+	}
+
 	private static function is_current_slugless_fallback_path( $path, WP_Post $post ) {
 		return '' === $post->post_name && self::path_uses_id_fallback_slug( $path ) && self::build_markdown_path( $post ) === $path;
 	}
 
 	private static function assert_id_fallback_path_is_current( $path, WP_Post $post ) {
-		if ( ! self::path_uses_id_fallback_slug( $path ) || self::build_markdown_path( $post ) === $path ) {
+		if ( ! self::path_uses_id_fallback_slug( $path ) ) {
+			return;
+		}
+		if ( self::build_markdown_path( $post ) === $path ) {
+			return;
+		}
+		if ( self::build_id_fallback_markdown_path( $post ) === $path && self::is_post_export_path_colliding( $post ) ) {
 			return;
 		}
 
@@ -2951,11 +2991,18 @@ class Push_MD_Plugin {
 					$postarr['post_name'] = $slug;
 				}
 			}
-		} elseif ( ! $existing_post || ! self::is_current_slugless_fallback_path( $path, $existing_post ) ) {
+		} elseif ( ! $existing_post || ( ! self::path_uses_id_fallback_slug( $path ) && ! self::is_current_slugless_fallback_path( $path, $existing_post ) ) ) {
 			$postarr['post_name'] = $slug;
 		}
 		if ( 'page' === $post_type ) {
 			$postarr['post_parent'] = $post_parent;
+		}
+
+		$effective_slug = isset( $postarr['post_name'] )
+			? $postarr['post_name']
+			: ( $existing_post && '' !== $existing_post->post_name ? $existing_post->post_name : ( self::path_uses_id_fallback_slug( $path ) ? '' : $slug ) );
+		if ( self::is_public_post_status( $post_status ) && '' !== $effective_slug ) {
+			self::assert_no_public_slug_collision( $post_type, $effective_slug, $existing_post, $post_parent );
 		}
 
 		$post_date_gmt = self::frontmatter_date_to_mysql_gmt( $metadata, $path );
@@ -4467,6 +4514,11 @@ class Push_MD_Plugin {
 		);
 
 		if ( empty( $posts ) ) {
+			$fallback_id = self::find_fallback_post_id_by_slug( $post_type, $slug, $statuses );
+			if ( $fallback_id ) {
+				return $fallback_id;
+			}
+
 			if ( ! $include_trash ) {
 				self::reject_unsupported_status_slug_collision( $post_type, $slug, self::$supported_post_statuses );
 				return 0;
@@ -4482,6 +4534,11 @@ class Push_MD_Plugin {
 				)
 			);
 			if ( empty( $posts ) ) {
+				$fallback_id = self::find_fallback_post_id_by_slug( $post_type, $slug, array( 'trash' ) );
+				if ( $fallback_id ) {
+					return $fallback_id;
+				}
+
 				self::reject_unsupported_status_slug_collision(
 					$post_type,
 					$slug,
@@ -4623,6 +4680,28 @@ class Push_MD_Plugin {
 		return $parent_id;
 	}
 
+	private static function find_fallback_post_id_by_slug( $post_type, $slug, $statuses ) {
+		$id = self::get_id_from_fallback_slug( $post_type, $slug );
+		if ( ! $id ) {
+			return 0;
+		}
+
+		$post = get_post( $id );
+		if (
+			! $post ||
+			$post_type !== $post->post_type ||
+			! in_array( $post->post_status, $statuses, true )
+		) {
+			return 0;
+		}
+
+		if ( '' !== $post->post_name && ! self::is_post_export_path_colliding( $post ) ) {
+			return 0;
+		}
+
+		return intval( $post->ID );
+	}
+
 	private static function find_slugless_page_id_by_fallback_slug( $slug, $parent_id, $statuses ) {
 		$id = self::get_id_from_fallback_slug( 'page', $slug );
 		if ( ! $id ) {
@@ -4633,14 +4712,46 @@ class Push_MD_Plugin {
 		if (
 			! $post ||
 			'page' !== $post->post_type ||
-			'' !== $post->post_name ||
 			intval( $post->post_parent ) !== intval( $parent_id ) ||
 			! in_array( $post->post_status, $statuses, true )
 		) {
 			return 0;
 		}
 
+		if ( '' !== $post->post_name && ! self::is_post_export_path_colliding( $post ) ) {
+			return 0;
+		}
+
 		return intval( $post->ID );
+	}
+
+	private static function assert_no_public_slug_collision( $post_type, $slug, $existing_post = null, $post_parent = null ) {
+		$public_statuses = array( 'publish', 'future' );
+		if ( function_exists( 'get_post_stati' ) ) {
+			$viewable = get_post_stati( array( 'public' => true ), 'names' );
+			if ( ! empty( $viewable ) ) {
+				$public_statuses = array_values( $viewable );
+			}
+		}
+
+		$args = array(
+			'post_type'      => $post_type,
+			'name'           => $slug,
+			'post_status'    => $public_statuses,
+			'posts_per_page' => -1,
+		);
+		if ( 'page' === $post_type && null !== $post_parent ) {
+			$args['post_parent'] = intval( $post_parent );
+		}
+
+		$conflicts = get_posts( $args );
+		foreach ( $conflicts as $conflict ) {
+			$conflict_id = is_object( $conflict ) ? intval( $conflict->ID ) : intval( $conflict );
+			if ( $existing_post instanceof WP_Post && intval( $existing_post->ID ) === $conflict_id ) {
+				continue;
+			}
+			throw new Exception( sprintf( 'Push rejected because a published WordPress post already uses the slug "%s".', $slug ) );
+		}
 	}
 
 	private static function path_to_page_parent_id( $path, $include_trash = true ) {

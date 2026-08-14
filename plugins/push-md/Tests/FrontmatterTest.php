@@ -51,8 +51,35 @@ if ( ! function_exists( 'delete_transient' ) ) {
 
 if ( ! function_exists( 'get_posts' ) ) {
 	function get_posts( $args = array() ) {
-		unset( $args );
-		return array();
+		$posts   = isset( $GLOBALS['mock_wp_posts'] ) && is_array( $GLOBALS['mock_wp_posts'] ) ? $GLOBALS['mock_wp_posts'] : array();
+		$results = array();
+		foreach ( $posts as $post ) {
+			if ( isset( $args['post_type'] ) && $post->post_type !== $args['post_type'] ) {
+				continue;
+			}
+			if ( isset( $args['name'] ) && $post->post_name !== $args['name'] ) {
+				continue;
+			}
+			if ( isset( $args['post_parent'] ) && intval( $post->post_parent ) !== intval( $args['post_parent'] ) ) {
+				continue;
+			}
+			if ( isset( $args['post_status'] ) ) {
+				$statuses = is_array( $args['post_status'] ) ? $args['post_status'] : array( $args['post_status'] );
+				if ( ! in_array( $post->post_status, $statuses, true ) ) {
+					continue;
+				}
+			}
+			if ( isset( $args['exclude'] ) && is_array( $args['exclude'] ) && in_array( intval( $post->ID ), $args['exclude'], true ) ) {
+				continue;
+			}
+			if ( ! empty( $args['fields'] ) && 'ids' === $args['fields'] ) {
+				$results[] = $post->ID;
+			} else {
+				$results[] = $post;
+			}
+		}
+
+		return $results;
 	}
 }
 

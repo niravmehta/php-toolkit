@@ -479,4 +479,23 @@ class HtmlMarkdownConversionTest extends TestCase {
 		$this->assertStringContainsString( 'Other Notable Mentions', $markup );
 		$this->assertStringContainsString( 'src="https://example.com/img.png"', $markup );
 	}
+
+	public function test_link_spaces_preserved() {
+		$html     = 'Click <a href="https://example.com">here </a>for more details.';
+		$md       = Push_MD_HTML_Converter::convert( $html );
+		$consumer = new Push_MD_Markdown_Consumer( $md, false );
+		$markup   = $consumer->consume()->get_block_markup();
+
+		$this->assertEquals( '<p>Click <a href="https://example.com">here</a> for more details.</p>', $markup );
+	}
+
+	public function test_raw_paragraph_link_formatting_continuity() {
+		$html = "According to the <a href=\"https://example.com\">Baymard Institute</a>, the average rate is 69%.\n\nCheck out <a href=\"https://example.com/express\">Icegram Express</a>!\n\n<h2>Next Section</h2>";
+		$md   = Push_MD_HTML_Converter::convert( $html );
+
+		$this->assertStringContainsString( 'According to the [Baymard Institute](https://example.com), the average rate is 69%.', $md );
+		$this->assertStringContainsString( 'Check out [Icegram Express](https://example.com/express)!', $md );
+		$this->assertStringNotContainsString( ")\n\n,", $md );
+		$this->assertStringNotContainsString( ")\n\n!", $md );
+	}
 }
