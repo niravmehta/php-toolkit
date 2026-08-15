@@ -106,7 +106,7 @@ class Push_MD_HTML_Converter {
 			$is_closer = $processor->is_tag_closer();
 
 			if ( ! $is_closer ) {
-				$custom_markdown = class_exists( 'Push_MD_Directives' ) ? Push_MD_Directives::convert_node( $processor, static::class ) : null;
+				$custom_markdown = class_exists( 'Push_MD_Callouts' ) ? Push_MD_Callouts::convert_node( $processor, static::class ) : null;
 				if ( null !== $custom_markdown ) {
 					$output   .= $custom_markdown;
 					$void_tags = array( 'img', 'br', 'hr', 'input', 'meta', 'link', 'embed', 'param', 'source', 'track', 'wbr' );

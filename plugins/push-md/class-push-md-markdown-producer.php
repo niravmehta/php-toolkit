@@ -3,7 +3,7 @@
 use WordPress\DataLiberation\DataFormatConsumer\BlocksWithMetadata;
 use WordPress\Markdown\MarkdownProducer;
 
-require_once __DIR__ . '/class-push-md-directives.php';
+require_once __DIR__ . '/class-push-md-callouts.php';
 
 /**
  * Thin wrapper around MarkdownProducer that adds support for posts whose
@@ -73,8 +73,8 @@ class Push_MD_Markdown_Producer {
 				$content
 			);
 
-			if ( class_exists( 'Push_MD_Directives' ) ) {
-				$content = Push_MD_Directives::process_html_directives_in_content( $content );
+			if ( class_exists( 'Push_MD_Callouts' ) ) {
+				$content = Push_MD_Callouts::process_html_directives_in_content( $content );
 			}
 
 			$metadata = $this->blocks_with_meta->get_all_metadata();
@@ -84,9 +84,9 @@ class Push_MD_Markdown_Producer {
 			$blocks_obj     = new BlocksWithMetadata( $content, $metadata );
 			$producer       = new MarkdownProducer( $blocks_obj );
 			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
-			
-			if ( class_exists( 'Push_MD_Directives' ) ) {
-				$this->markdown = Push_MD_Directives::process_gutenberg_to_markdown( $this->markdown );
+
+			if ( class_exists( 'Push_MD_Callouts' ) ) {
+				$this->markdown = Push_MD_Callouts::process_gutenberg_to_markdown( $this->markdown );
 			}
 		} else {
 			// Standard HTML or plain-text content.

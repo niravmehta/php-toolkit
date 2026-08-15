@@ -3,7 +3,7 @@
 use WordPress\DataLiberation\DataFormatConsumer\BlocksWithMetadata;
 use WordPress\Markdown\MarkdownConsumer;
 
-require_once __DIR__ . '/class-push-md-directives.php';
+require_once __DIR__ . '/class-push-md-callouts.php';
 
 /**
  * Thin wrapper around MarkdownConsumer that optionally strips Gutenberg
@@ -61,7 +61,7 @@ class Push_MD_Markdown_Consumer {
 			return $this->result;
 		}
 
-		$this->markdown = Push_MD_Directives::process_markdown_to_html( $this->markdown, $this->use_block_comments );
+		$this->markdown = Push_MD_Callouts::process_markdown_to_html( $this->markdown, $this->use_block_comments );
 
 		$inner_consumer = new MarkdownConsumer( $this->markdown );
 		$raw_result     = $inner_consumer->consume();

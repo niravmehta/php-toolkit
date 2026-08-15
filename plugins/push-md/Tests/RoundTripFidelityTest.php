@@ -71,10 +71,10 @@ class RoundTripFidelityTest extends TestCase {
 	);
 
 	public static function setUpBeforeClass(): void {
-		if ( class_exists( 'Push_MD_Directives' ) ) {
-			Push_MD_Directives::register( 'faq', array( 'class' => 'faq', 'tag' => 'div' ) );
-			Push_MD_Directives::register( 'notice', array( 'class' => 'notice', 'tag' => 'div' ) );
-			Push_MD_Directives::register( 'myblock', array( 'block' => 'my/block' ) );
+		if ( class_exists( 'Push_MD_Callouts' ) ) {
+			Push_MD_Callouts::register( 'faq', array( 'class' => 'faq', 'tag' => 'div', 'title_element' => 'h2' ) );
+			Push_MD_Callouts::register( 'notice', array( 'class' => 'notice', 'tag' => 'div', 'title_element' => 'p.callout-title' ) );
+			Push_MD_Callouts::register( 'myblock', array( 'block' => 'my/block' ) );
 		}
 	}
 
@@ -863,4 +863,61 @@ class RoundTripFidelityTest extends TestCase {
 			'headings' => $headings,
 		);
 	}
+
+	public function test_gfm_callout_normalization_and_html_generation() {
+		$markdown = "> [!faq] Frequently Asked Questions\n> ### What is the return policy?\n> You can return within 30 days.\n";
+		$consumer = new Push_MD_Markdown_Consumer( $markdown, false );
+		$html     = $consumer->consume()->get_block_markup();
+
+		$this->assertStringContainsString( '<div class="faq">', $html );
+		$this->assertStringContainsString( '<h2>Frequently Asked Questions</h2>', $html );
+		$this->assertStringContainsString( '<h3>What is the return policy?</h3>', $html );
+		$this->assertStringContainsString( 'You can return within 30 days.', $html );
+	}
+
+	public function test_code_block_admonition_normalization() {
+		$markdown = "```ad-faq\ntitle: Frequently Asked Questions\n### What is the return policy?\nYou can return within 30 days.\n```";
+		$consumer = new Push_MD_Markdown_Consumer( $markdown, false );
+		$html     = $consumer->consume()->get_block_markup();
+
+		$this->assertStringContainsString( '<div class="faq">', $html );
+		$this->assertStringContainsString( '<h2>Frequently Asked Questions</h2>', $html );
+		$this->assertStringContainsString( '<h3>What is the return policy?</h3>', $html );
+	}
+
+	public function test_callout_title_element_support() {
+		$markdown = "> [!notice] Important Update\n> System maintenance at midnight.\n";
+		$consumer = new Push_MD_Markdown_Consumer( $markdown, false );
+		$html     = $consumer->consume()->get_block_markup();
+
+		$this->assertStringContainsString( '<div class="notice">', $html );
+		$this->assertStringContainsString( '<p class="callout-title">Important Update</p>', $html );
+		$this->assertStringContainsString( 'System maintenance at midnight.', $html );
+	}
+
+	public function test_export_callout_format_and_filter_override() {
+		$html = "<div class=\"faq\">\n<h2>Frequently Asked Questions</h2>\n<h3>Question?</h3>\n<p>Answer.</p>\n</div>";
+
+		// 1. Default export to GFM callout format (> [!faq] Title)
+		$gfm_exported = Push_MD_HTML_Converter::convert( $html );
+		$this->assertStringContainsString( '> [!faq] Frequently Asked Questions', $gfm_exported );
+		$this->assertStringContainsString( '> ### Question?', $gfm_exported );
+		$this->assertStringContainsString( '> Answer.', $gfm_exported );
+
+		// 2. Filter override to directive format (:::faq) if WordPress filter system is active
+		if ( function_exists( 'add_filter' ) ) {
+			$filter_cb = function () {
+				return 'directive';
+			};
+			add_filter( 'push_md_export_callout_format', $filter_cb );
+			$dir_exported = Push_MD_HTML_Converter::convert( $html );
+			if ( function_exists( 'remove_filter' ) ) {
+				remove_filter( 'push_md_export_callout_format', $filter_cb );
+			}
+
+			$this->assertStringContainsString( ':::faq', $dir_exported );
+			$this->assertStringContainsString( '## Frequently Asked Questions', $dir_exported );
+		}
+	}
 }
+
