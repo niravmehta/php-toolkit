@@ -50,6 +50,7 @@ services:
       - ../../..:/srv/php-toolkit:ro
       - ./init.sh:/init.sh:ro
       - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ../../../../icon-helper:/var/www/html/wp-content/plugins/icon-helper:ro
     entrypoint: [ "bash", "/init.sh" ]
     restart: "no"
 
