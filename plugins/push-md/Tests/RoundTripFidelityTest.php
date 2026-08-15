@@ -70,6 +70,14 @@ class RoundTripFidelityTest extends TestCase {
 		'failed_unbound'       => array(),
 	);
 
+	public static function setUpBeforeClass(): void {
+		if ( class_exists( 'Push_MD_Directives' ) ) {
+			Push_MD_Directives::register( 'faq', array( 'class' => 'faq', 'tag' => 'div' ) );
+			Push_MD_Directives::register( 'notice', array( 'class' => 'notice', 'tag' => 'div' ) );
+			Push_MD_Directives::register( 'myblock', array( 'block' => 'my/block' ) );
+		}
+	}
+
 	/**
 	 * Print the test log summary after all tests complete.
 	 *
@@ -420,6 +428,21 @@ class RoundTripFidelityTest extends TestCase {
 				'html'              => "<pre><code>&lt;div class=\"container\"&gt;\n    &lt;p&gt;Sample HTML &amp;amp; text&lt;/p&gt;\n&lt;/div&gt;</code></pre>",
 				'mutation_strategy' => 'heading_append',
 			),
+			'generic_directive_pattern1' => array(
+				'name'              => 'generic_directive_pattern1',
+				'html'              => '<div class="faq"><p>Pattern 1 faq test.</p></div>',
+				'mutation_strategy' => 'word_append',
+			),
+			'generic_directive_pattern1_args' => array(
+				'name'              => 'generic_directive_pattern1_args',
+				'html'              => '<div class="notice" data-color="red" id="notice-id"><p>Notice text</p></div>',
+				'mutation_strategy' => 'none',
+			),
+			'generic_directive_pattern2_block' => array(
+				'name'              => 'generic_directive_pattern2_block',
+				'html'              => "<!-- wp:my/block {\"align\":\"wide\"} -->\n<div class=\"wp-block-my-block\"><p>Inner block content</p></div>\n<!-- /wp:my/block -->",
+				'mutation_strategy' => 'none',
+			),
 		);
 
 		// Dynamically include all published posts and pages from the database if WordPress DB is loaded
@@ -475,7 +498,7 @@ class RoundTripFidelityTest extends TestCase {
 			$lines = explode( "\n", $markdown );
 			for ( $i = count( $lines ) - 1; $i >= 0; $i-- ) {
 				$line = trim( $lines[ $i ] );
-				if ( '' !== $line && 0 !== strpos( $line, '<!--' ) ) {
+				if ( '' !== $line && 0 !== strpos( $line, '<!--' ) && ':::' !== $line ) {
 					$lines[ $i ] .= ' ' . $token;
 					return implode( "\n", $lines );
 				}

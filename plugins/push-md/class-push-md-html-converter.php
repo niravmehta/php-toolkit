@@ -2,6 +2,8 @@
 
 use WordPress\DataLiberation\DataLiberationHTMLProcessor;
 
+require_once __DIR__ . '/class-push-md-directives.php';
+
 /**
  * Converts a standard HTML string to clean Markdown.
  *
@@ -48,7 +50,7 @@ class Push_MD_HTML_Converter {
 	 * @param string $html HTML fragment.
 	 * @return string Markdown.
 	 */
-	private static function convert_fragment( $html ) {
+	public static function convert_fragment( $html ) {
 		$processor = DataLiberationHTMLProcessor::create_fragment( $html );
 		$output    = '';
 
@@ -106,43 +108,10 @@ class Push_MD_HTML_Converter {
 			$is_closer = $processor->is_tag_closer();
 
 			if ( ! $is_closer ) {
-				// Check for raw HTML preservation based on tag name or CSS classes.
-				if ( self::should_preserve_element( $processor, $tag ) ) {
-					$container_tags = array( 'div', 'aside', 'section', 'article', 'header', 'footer', 'nav', 'main', 'figure', 'blockquote' );
-					if ( in_array( strtolower( $tag ), $container_tags, true ) ) {
-						$inner = $processor->get_inner_html();
-						if ( false !== $inner ) {
-							$attr_names = $processor->get_attribute_names_with_prefix( '' );
-							$attr_str   = '';
-							if ( ! empty( $attr_names ) ) {
-								foreach ( $attr_names as $name ) {
-									$val       = $processor->get_attribute( $name );
-									$attr_str .= ' ' . $name . '="' . htmlspecialchars( $val, ENT_QUOTES | ENT_HTML5, 'UTF-8' ) . '"';
-								}
-							}
-							$opening_tag = '<' . strtolower( $tag ) . $attr_str . '>';
-							$closing_tag = '</' . strtolower( $tag ) . '>';
-
-							$inner_md = self::convert_fragment( $inner );
-							$output   = rtrim( $output ) . "\n\n" . $opening_tag . "\n\n" . trim( $inner_md ) . "\n\n" . $closing_tag . "\n\n";
-							$processor->skip_to_closer();
-							continue;
-						}
-					}
-
-					$outer       = self::get_outer_html( $processor, $tag );
-					$outer       = preg_replace( '/^[ \t]+/m', '', $outer );
-					$inline_tags = array( 'a', 'span', 'b', 'i', 'strong', 'em', 'code', 's', 'del', 'sub', 'sup' );
-					if ( in_array( strtolower( $tag ), $inline_tags, true ) ) {
-						$output .= $outer;
-					} else {
-						$outer_clean = preg_replace( "/\n{2,}/", "\n", $outer );
-						$output      = rtrim( $output ) . "\n\n" . $outer_clean . "\n\n";
-					}
-					$void_tags = array( 'img', 'br', 'hr', 'input', 'meta', 'link', 'embed', 'param', 'source', 'track', 'wbr', 'style', 'script' );
-					if ( ! in_array( strtolower( $tag ), $void_tags, true ) ) {
-						$processor->skip_to_closer();
-					}
+				$custom_markdown = class_exists( 'Push_MD_Directives' ) ? Push_MD_Directives::convert_node( $processor, static::class ) : null;
+				if ( null !== $custom_markdown ) {
+					$output .= $custom_markdown;
+					$processor->skip_to_closer();
 					continue;
 				}
 
@@ -726,158 +695,9 @@ class Push_MD_HTML_Converter {
 		$output .= $delimiter . $trailing_space;
 	}
 
-	/**
-	 * Check if an HTML element should be preserved as raw HTML based on tag name or CSS classes.
-	 *
-	 * Filters:
-	 *   - push_md_preserved_html_tags: array of tag names (e.g., array('figcaption', 'iframe', 'form', 'aside'))
-	 *   - push_md_preserved_html_classes: array of CSS classes or prefixes (e.g., array('alignleft', 'alignright', 'wp-caption', 'gallery'))
-	 *
-	 * @param DataLiberationHTMLProcessor $processor HTML processor positioned at tag opener.
-	 * @param string                      $tag       Tag name.
-	 * @return bool True if element should be preserved as raw HTML.
-	 */
-	private static function should_preserve_element( $processor, $tag ) {
-		$tag = strtolower( $tag );
 
-		// Inline images with floating alignment (alignleft/alignright/aligncenter), media IDs, or dimensions are preserved as raw HTML.
-		if ( 'img' === $tag ) {
-			$class_attr = $processor->get_attribute( 'class' );
-			$has_align  = $class_attr && preg_match( '/\b(alignleft|alignright|aligncenter|wp-image-\d+)\b/', $class_attr );
-			$has_dims   = null !== $processor->get_attribute( 'width' ) || null !== $processor->get_attribute( 'height' );
-			if ( $has_align || $has_dims ) {
-				return true;
-			}
-			return false;
-		}
 
-		if ( 'figure' === $tag ) {
-			$inner = $processor->get_inner_html();
-			if ( false === $inner || false === strpos( strtolower( $inner ), '<figcaption' ) ) {
-				return false;
-			}
-			return true;
-		}
 
-		// Anchors that carry JavaScript event handlers (onclick etc.) must be
-		// preserved as raw HTML; converting them to Markdown links would discard
-		// the handler attribute (e.g. tutorial code snippets like
-		// <a href="#" onclick="window.icegram.get_message_by_id(...)">...).
-		if ( 'a' === $tag ) {
-			$attr_names = $processor->get_attribute_names_with_prefix( 'on' );
-			if ( ! empty( $attr_names ) ) {
-				return true;
-			}
-		}
-
-		// Inline <code> elements that contain nested markup (anchors, buttons)
-		// cannot be represented as Markdown code spans without corrupting the
-		// snippet (e.g. [icegram ...]<a href="#">text</a>[/icegram]), so preserve
-		// them as raw inline HTML.
-		if ( 'code' === $tag ) {
-			$inner = $processor->get_inner_html();
-			if ( false !== $inner && preg_match( '/<[a-z][a-z0-9]*/i', $inner ) ) {
-				return true;
-			}
-			return false;
-		}
-
-		// 1. Tag name preservation.
-		$default_preserved_tags = array( 'figure', 'figcaption', 'iframe', 'form', 'script', 'style', 'svg', 'canvas', 'video', 'audio', 'picture', 'source', 'track' );
-		if ( function_exists( 'apply_filters' ) ) {
-			$preserved_tags = apply_filters( 'push_md_preserved_html_tags', $default_preserved_tags, $tag );
-		} else {
-			$preserved_tags = $default_preserved_tags;
-		}
-
-		if ( in_array( $tag, $preserved_tags, true ) ) {
-			return true;
-		}
-
-		// Check for ID (but ignore IDs on headings, as Markdown will auto-generate them on round-trip).
-		if ( null !== $processor->get_attribute( 'id' ) ) {
-			if ( ! preg_match( '/^h[1-6]$/i', $tag ) ) {
-				return true;
-			}
-		}
-
-		// Check for inline styles.
-		if ( null !== $processor->get_attribute( 'style' ) ) {
-			return true;
-		}
-
-		// 2. CSS Class preservation.
-		$class_attr = $processor->get_attribute( 'class' );
-		if ( ! empty( $class_attr ) && is_string( $class_attr ) ) {
-			$classes = preg_split( '/\s+/', trim( $class_attr ) );
-
-			// Allow filtering of preserved classes (e.g. CTA buttons, custom component wrappers).
-			$default_preserved_classes = array( 'button', 'btn', 'cta', 'download_link' );
-			$preserved_classes         = function_exists( 'apply_filters' )
-				? apply_filters( 'push_md_preserved_html_classes', $default_preserved_classes, $tag, $classes )
-				: $default_preserved_classes;
-
-			// For links (A tags), preserve if they carry any explicit preserved class AND have an href attribute.
-			if ( 'a' === $tag ) {
-				$href = $processor->get_attribute( 'href' );
-				if ( null === $href || '' === trim( $href ) ) {
-					return false;
-				}
-				$is_button = false;
-				foreach ( $classes as $class ) {
-					if ( in_array( $class, $preserved_classes, true ) ) {
-						$is_button = true;
-						break;
-					}
-				}
-				if ( ! $is_button ) {
-					return false;
-				}
-				return true;
-			}
-
-			// Elements with custom classes not in standard WP classes must be preserved.
-			$standard_wp_classes = array(
-				'has-fixed-layout',
-				'is-style-stripes',
-				'wp-block-table',
-				'wp-block-quote',
-				'wp-block-paragraph',
-				'wp-block-heading',
-				'wp-block-list',
-				'wp-block-code',
-				'aligncenter',
-				'alignleft',
-				'alignright',
-				'alignnone',
-				'alignwide',
-				'alignfull',
-				'has-text-align-center',
-				'has-text-align-left',
-				'has-text-align-right',
-				'has-background',
-				'has-text-color',
-				'has-large-font-size',
-				'wp-caption',
-				'wp-caption-text',
-				'gallery',
-				'gallery-item',
-				'gallery-icon',
-				'gallery-caption',
-				'size-full',
-				'size-large',
-				'size-medium',
-				'size-thumbnail',
-			);
-
-			$custom_classes = array_diff( $classes, $standard_wp_classes );
-			if ( ! empty( $custom_classes ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
 
 	/**
 	 * Reconstruct outer HTML string for the current tag element.
@@ -886,7 +706,7 @@ class Push_MD_HTML_Converter {
 	 * @param string                      $tag       The tag name.
 	 * @return string Outer HTML element string.
 	 */
-	private static function get_outer_html( $processor, $tag ) {
+	public static function get_outer_html( $processor, $tag ) {
 		$tag        = strtolower( (string) $tag );
 		$attr_names = $processor->get_attribute_names_with_prefix( '' );
 		$attr_str   = '';

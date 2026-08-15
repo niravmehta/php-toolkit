@@ -3,6 +3,8 @@
 use WordPress\DataLiberation\DataFormatConsumer\BlocksWithMetadata;
 use WordPress\Markdown\MarkdownConsumer;
 
+require_once __DIR__ . '/class-push-md-directives.php';
+
 /**
  * Thin wrapper around MarkdownConsumer that optionally strips Gutenberg
  * block comment wrappers from the generated HTML.
@@ -58,6 +60,8 @@ class Push_MD_Markdown_Consumer {
 		if ( null !== $this->result ) {
 			return $this->result;
 		}
+
+		$this->markdown = Push_MD_Directives::process_markdown_to_html( $this->markdown, $this->use_block_comments );
 
 		$inner_consumer = new MarkdownConsumer( $this->markdown );
 		$raw_result     = $inner_consumer->consume();

@@ -29,6 +29,7 @@ if ( file_exists( __DIR__ . '/php-toolkit/vendor/composer/ClassLoader.php' ) ) {
 
 require_once __DIR__ . '/functions.php';
 require_once __DIR__ . '/class-push-md-path-filter.php';
+require_once __DIR__ . '/class-push-md-directives.php';
 require_once __DIR__ . '/class-push-md-html-converter.php';
 require_once __DIR__ . '/class-push-md-markdown-producer.php';
 require_once __DIR__ . '/class-push-md-markdown-consumer.php';

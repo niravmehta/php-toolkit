@@ -3,6 +3,8 @@
 use WordPress\DataLiberation\DataFormatConsumer\BlocksWithMetadata;
 use WordPress\Markdown\MarkdownProducer;
 
+require_once __DIR__ . '/class-push-md-directives.php';
+
 /**
  * Thin wrapper around MarkdownProducer that adds support for posts whose
  * content is standard HTML (classic editor, raw HTML, imported HTML)
@@ -71,6 +73,10 @@ class Push_MD_Markdown_Producer {
 				$content
 			);
 
+			if ( class_exists( 'Push_MD_Directives' ) ) {
+				$content = Push_MD_Directives::process_html_directives_in_content( $content );
+			}
+
 			$metadata = $this->blocks_with_meta->get_all_metadata();
 			if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'sort_frontmatter_keys' ) ) {
 				$metadata = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
@@ -78,6 +84,10 @@ class Push_MD_Markdown_Producer {
 			$blocks_obj     = new BlocksWithMetadata( $content, $metadata );
 			$producer       = new MarkdownProducer( $blocks_obj );
 			$this->markdown = Push_MD_HTML_Converter::normalize_markdown( $producer->produce() );
+			
+			if ( class_exists( 'Push_MD_Directives' ) ) {
+				$this->markdown = Push_MD_Directives::process_gutenberg_to_markdown( $this->markdown );
+			}
 		} else {
 			// Standard HTML or plain-text content.
 			$this->markdown = $this->frontmatter( $this->blocks_with_meta->get_all_metadata() )
