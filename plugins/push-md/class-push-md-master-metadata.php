@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-use WordPress\Git\TreeEntry;
+use WordPress\Git\Model\TreeEntry;
 
 /**
  * Class Push_MD_Master_Metadata

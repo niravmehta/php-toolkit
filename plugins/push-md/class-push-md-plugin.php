@@ -2173,7 +2173,11 @@ class Push_MD_Plugin {
 		if ( ! empty( $categories ) && ! is_wp_error( $categories ) ) {
 			$cat_paths = array();
 			foreach ( $categories as $cat ) {
-				$cat_paths[] = self::get_category_path_string( $cat );
+				if ( class_exists( 'Push_MD_Master_Metadata' ) ) {
+					$cat_paths[] = Push_MD_Master_Metadata::get_category_path_string( $cat );
+				} else {
+					$cat_paths[] = $cat->name;
+				}
 			}
 			$metadata['categories'] = $cat_paths;
 		}
