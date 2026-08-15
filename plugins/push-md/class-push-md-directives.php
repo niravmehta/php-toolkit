@@ -2,7 +2,7 @@
 
 /**
  * Registry and processor for Generic Directives (:::).
- * 
+ *
  * Handles mapping between Markdown `:::` blocks and HTML/Gutenberg blocks.
  * Also serves as the central authority for raw HTML preservation rules.
  */
@@ -33,7 +33,7 @@ class Push_MD_Directives {
 			'block' => null,
 		);
 
-		if ( isset( $config['block'] ) && is_string( $config['block'] ) && strpos( $config['block'], '/' ) !== false ) {
+		if ( isset( $config['block'] ) && is_string( $config['block'] ) && false !== strpos( $config['block'], '/' ) ) {
 			$parsed['block'] = $config['block'];
 		}
 
@@ -65,15 +65,15 @@ class Push_MD_Directives {
 			if ( false !== $inner_html ) {
 				$inner_md = call_user_func( array( $converter_class, 'convert_fragment' ), $inner_html );
 				$inner_md = trim( $inner_md );
-				
+
 				$args_str = '';
-				// Collect attributes that aren't the tag/class/id standard to the directive
+				// Collect attributes that aren't the tag/class/id standard to the directive.
 				$attr_names = $processor->get_attribute_names_with_prefix( '' );
 				$args       = array();
 				if ( ! empty( $attr_names ) ) {
 					foreach ( $attr_names as $attr_name ) {
 						if ( 'class' === $attr_name ) {
-							$classes = explode( ' ', trim( $processor->get_attribute( 'class' ) ) );
+							$classes  = explode( ' ', trim( $processor->get_attribute( 'class' ) ) );
 							$filtered = array_diff( $classes, array( $matched['class'] ) );
 							if ( ! empty( $filtered ) ) {
 								$args['class'] = implode( ' ', $filtered );
@@ -87,7 +87,7 @@ class Push_MD_Directives {
 						}
 					}
 				}
-				
+
 				if ( ! empty( $args ) ) {
 					$args_str = ' ' . self::format_args( $args );
 				}
@@ -121,10 +121,10 @@ class Push_MD_Directives {
 			// Inline elements get preserved raw.
 			// DataLiberationHTMLProcessor does not have get_outer_html natively in this version unless patched.
 			// The original code used self::get_outer_html. We must call it from $converter_class.
-			$outer = call_user_func( array( $converter_class, 'get_outer_html' ), $processor, $tag );
-			$outer = preg_replace( '/^[ \t]+/m', '', $outer );
+			$outer       = call_user_func( array( $converter_class, 'get_outer_html' ), $processor, $tag );
+			$outer       = preg_replace( '/^[ \t]+/m', '', $outer );
 			$inline_tags = array( 'a', 'span', 'b', 'i', 'strong', 'em', 'code', 's', 'del', 'sub', 'sup' );
-			
+
 			if ( in_array( strtolower( $tag ), $inline_tags, true ) ) {
 				return $outer;
 			} else {
@@ -153,7 +153,7 @@ class Push_MD_Directives {
 			}
 
 			// Must match tag.
-			if ( $tag !== strtolower( $directive['tag'] ) ) {
+			if ( strtolower( $directive['tag'] ) !== $tag ) {
 				continue;
 			}
 
@@ -273,14 +273,14 @@ class Push_MD_Directives {
 		$in_code_block = false;
 		$code_fence    = '';
 		$stack         = array();
-		
+
 		foreach ( $lines as $line ) {
 			if ( ! $in_code_block && preg_match( '/^(\`\`\`|~~~)/', ltrim( $line ), $matches ) ) {
 				$in_code_block = true;
 				$code_fence    = $matches[1];
 				$output[]      = $line;
 				continue;
-			} elseif ( $in_code_block && strpos( ltrim( $line ), $code_fence ) === 0 ) {
+			} elseif ( $in_code_block && 0 === strpos( ltrim( $line ), $code_fence ) ) {
 				$in_code_block = false;
 				$output[]      = $line;
 				continue;
@@ -302,26 +302,26 @@ class Push_MD_Directives {
 
 			if ( ! $in_code_block && preg_match( '/^:::$/', trim( $line ) ) ) {
 				if ( ! empty( $stack ) ) {
-					$current = array_pop( $stack );
+					$current  = array_pop( $stack );
 					$inner_md = implode( "\n", $current['inner'] );
-					
-					// Convert inner markdown recursively
+
+					// Convert inner markdown recursively.
 					if ( class_exists( 'Push_MD_Markdown_Consumer' ) ) {
-						$consumer = new Push_MD_Markdown_Consumer( $inner_md, $use_block_comments );
+						$consumer     = new Push_MD_Markdown_Consumer( $inner_md, $use_block_comments );
 						$inner_blocks = $consumer->consume();
-						$inner_html = $inner_blocks ? $inner_blocks->get_block_markup() : '';
+						$inner_html   = $inner_blocks ? $inner_blocks->get_block_markup() : '';
 					} else {
-						// Fallback if class not available (e.g. testing)
+						// Fallback if class not available (e.g. testing).
 						$inner_html = $inner_md;
 					}
 
 					$directive = $current['directive'];
-					
+
 					if ( $directive['block'] ) {
-						// Pattern 2: Gutenberg Block
+						// Pattern 2: Gutenberg Block.
 						$block_name = $directive['block'];
 						$attrs_json = empty( $current['args'] ) ? '{}' : json_encode( $current['args'] );
-						$html = '';
+						$html       = '';
 						if ( $use_block_comments ) {
 							$html .= '<!-- wp:' . $block_name . ' ' . $attrs_json . ' -->' . "\n";
 						}
@@ -331,8 +331,8 @@ class Push_MD_Directives {
 							$html .= '<!-- /wp:' . $block_name . ' -->';
 						}
 					} else {
-						// Pattern 1: HTML Tag
-						$tag = $directive['tag'];
+						// Pattern 1: HTML Tag.
+						$tag      = $directive['tag'];
 						$attr_str = 'class="' . htmlspecialchars( $directive['class'], ENT_QUOTES | ENT_HTML5, 'UTF-8' ) . '"';
 						foreach ( $current['args'] as $k => $v ) {
 							if ( 'class' === $k ) {
@@ -368,36 +368,40 @@ class Push_MD_Directives {
 	 */
 	public static function process_gutenberg_to_markdown( $markdown ) {
 		$pattern = '/```gutenberg\r?\n<!-- wp:([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)(?: (.*?))? -->\r?\n(.*?)\r?\n<!-- \/wp:\1 -->\r?\n```/ms';
-		
-		return preg_replace_callback( $pattern, function( $matches ) {
-			$block_name = $matches[1];
-			$attrs_json = $matches[2] ? trim( $matches[2] ) : '{}';
-			$inner_html = $matches[3];
 
-			$directive = null;
-			foreach ( self::$registry as $reg ) {
-				if ( $reg['block'] === $block_name ) {
-					$directive = $reg;
-					break;
+		return preg_replace_callback(
+			$pattern,
+			function ( $matches ) {
+				$block_name = $matches[1];
+				$attrs_json = $matches[2] ? trim( $matches[2] ) : '{}';
+				$inner_html = $matches[3];
+
+				$directive = null;
+				foreach ( self::$registry as $reg ) {
+					if ( $reg['block'] === $block_name ) {
+						$directive = $reg;
+						break;
+					}
 				}
-			}
 
-			if ( ! $directive ) {
-				return $matches[0];
-			}
+				if ( ! $directive ) {
+					return $matches[0];
+				}
 
-			$args = json_decode( $attrs_json, true );
-			if ( ! is_array( $args ) ) {
-				$args = array();
-			}
+				$args = json_decode( $attrs_json, true );
+				if ( ! is_array( $args ) ) {
+					$args = array();
+				}
 
-			$args_str = empty( $args ) ? '' : ' ' . self::format_args( $args );
-			
-			$inner_html = preg_replace( '/^<div class="wp-block-[^>]+>\s*(.*?)\s*<\/div>$/is', '$1', $inner_html );
-			$inner_md = Push_MD_HTML_Converter::convert( $inner_html );
+				$args_str = empty( $args ) ? '' : ' ' . self::format_args( $args );
 
-			return ":::" . $directive['name'] . $args_str . "\n" . trim( $inner_md ) . "\n:::";
-		}, $markdown );
+				$inner_html = preg_replace( '/^<div class="wp-block-[^>]+>\s*(.*?)\s*<\/div>$/is', '$1', $inner_html );
+				$inner_md   = Push_MD_HTML_Converter::convert( $inner_html );
+
+				return ':::' . $directive['name'] . $args_str . "\n" . trim( $inner_md ) . "\n:::";
+			},
+			$markdown
+		);
 	}
 
 	public static function parse_args( $arg_string ) {
@@ -453,4 +457,3 @@ class Push_MD_Directives {
 		return $content;
 	}
 }
-
