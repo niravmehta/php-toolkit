@@ -144,13 +144,12 @@ final class LinkParserHelper
         // that no closing brace exists, so we can skip the regex entirely. This helps avoid
         // certain pathological cases where the regex engine can take a very long time to
         // determine that no match exists.
-        $currentCursor = (self::$lastCursor !== null && \class_exists('WeakReference') && self::$lastCursor instanceof \WeakReference) ? self::$lastCursor->get() : self::$lastCursor;
-        if (self::$lastCursor !== null && $currentCursor === $cursor) {
+        if (self::$lastCursor !== null && self::$lastCursor->get() === $cursor) {
             if (self::$lastCursorLacksClosingBrace) {
                 return null;
             }
         } else {
-            self::$lastCursor = \class_exists('WeakReference') ? \WeakReference::create($cursor) : $cursor;
+            self::$lastCursor = \WeakReference::create($cursor);
         }
 
         if ($res = $cursor->match(RegexHelper::REGEX_LINK_DESTINATION_BRACES)) {
