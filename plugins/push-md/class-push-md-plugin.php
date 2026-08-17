@@ -4413,9 +4413,6 @@ class Push_MD_Plugin {
 		if ( isset( $metadata['type'] ) ) {
 			self::throw_push_rejection( 'Markdown front matter must not include a "type" field. The directory determines the post type.', $path );
 		}
-		if ( isset( $metadata['slug'] ) ) {
-			self::throw_push_rejection( 'Markdown front matter must not include a "slug" field. The file path determines the post slug.', $path );
-		}
 	}
 
 	private static function normalize_supported_frontmatter( $metadata, $allowed_keys, $path = '' ) {
