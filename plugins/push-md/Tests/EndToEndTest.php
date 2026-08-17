@@ -1188,7 +1188,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Slug front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter must not include a slug.', $push_result['output'] );
+		$this->assertStringContainsString( 'Push rejected in file "post/rejected-slug-frontmatter.md" because Markdown front matter must not include a "slug" field.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1202,7 +1202,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Type front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter must not include a type.', $push_result['output'] );
+		$this->assertStringContainsString( 'Push rejected in file "post/rejected-type-frontmatter.md" because Markdown front matter must not include a "type" field.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		mkdir( $clone_dir . '/post/nested-path' );
