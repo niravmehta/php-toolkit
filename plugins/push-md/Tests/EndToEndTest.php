@@ -1174,7 +1174,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'ID front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter id must be a positive integer.', $push_result['output'] );
+		$this->assertStringContainsString( 'Push rejected in file "post/rejected-id-frontmatter.md" because Markdown front matter id must be a positive integer.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
