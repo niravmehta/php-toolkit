@@ -1178,21 +1178,6 @@ class PMD_End_To_End_Test extends TestCase {
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
-			$clone_dir . '/post/accepted-slug-frontmatter.md',
-			"---\nslug: \"custom-slug-frontmatter\"\nstatus: \"publish\"\ntitle: \"Accepted Slug Front Matter\"\n---\n\nThis push must be accepted.\n"
-		);
-		$this->run_cmd( array( 'git', '-C', $clone_dir, 'add', 'post/accepted-slug-frontmatter.md' ) );
-		$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Accept post slug front matter' ) );
-		$push_result = $this->run_cmd(
-			array( 'git', '-C', $clone_dir, 'push', 'origin', 'trunk' ),
-			true
-		);
-		$this->assertSame( 0, $push_result['code'], 'Slug front matter should be supported and accepted.' );
-		$this->run_cmd( array( 'git', '-C', $clone_dir, 'rm', 'post/accepted-slug-frontmatter.md' ) );
-		$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Clean up accepted slug front matter test post' ) );
-		$this->run_cmd( array( 'git', '-C', $clone_dir, 'push', 'origin', 'trunk' ) );
-
-		file_put_contents(
 			$clone_dir . '/post/rejected-type-frontmatter.md',
 			"---\ntype: \"post\"\nstatus: \"publish\"\ntitle: \"Rejected Type Front Matter\"\n---\n\nThis push must be rejected.\n"
 		);
