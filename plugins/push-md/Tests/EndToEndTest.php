@@ -1472,7 +1472,7 @@ class PMD_End_To_End_Test extends TestCase {
 
 		file_put_contents(
 			$clone_dir . '/post/rejected-unknown-frontmatter.md',
-			"---\nstatus: \"publish\"\nauthor: \"admin\"\ntitle: \"Rejected Unknown Front Matter\"\n---\n\nThis push must be rejected.\n"
+			"---\nstatus: \"publish\"\nunknown_field: \"admin\"\ntitle: \"Rejected Unknown Front Matter\"\n---\n\nThis push must be rejected.\n"
 		);
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'add', 'post/rejected-unknown-frontmatter.md' ) );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Reject unknown front matter' ) );
@@ -1481,7 +1481,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Unknown front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected in file "post/rejected-unknown-frontmatter.md" because Markdown front matter field "author" is not supported.', $push_result['output'] );
+		$this->assertStringContainsString( 'Push rejected in file "post/rejected-unknown-frontmatter.md" because Markdown front matter field "unknown_field" is not supported.', $push_result['output'] );
 		$this->assertStringContainsString( 'Supported front matter fields are:', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
