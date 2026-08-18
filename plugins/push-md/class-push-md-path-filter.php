@@ -91,29 +91,7 @@ class Push_MD_Path_Filter {
 			return false;
 		}
 
-		// Post type specific extension and structure validation.
-		if ( 'wp_template' === $root_dir || 'wp_template_part' === $root_dir || 'wp_navigation' === $root_dir ) {
-			return 'html' === pathinfo( $clean_path, PATHINFO_EXTENSION );
-		}
-
-		if ( 'wp_theme' === $root_dir || 'wp_global_styles' === $root_dir ) {
-			return 'json' === pathinfo( $clean_path, PATHINFO_EXTENSION );
-		}
-
-		if ( 'wp_guideline' === $root_dir ) {
-			return 'md' === pathinfo( $clean_path, PATHINFO_EXTENSION );
-		}
-
-		if ( 'post' === $root_dir ) {
-			return 2 === count( $segments ) && 'md' === pathinfo( $clean_path, PATHINFO_EXTENSION );
-		}
-
-		if ( 'page' === $root_dir ) {
-			return count( $segments ) >= 2 && 'md' === pathinfo( $clean_path, PATHINFO_EXTENSION );
-		}
-
-		// Fallback for custom or newly registered post types: must be a .md file.
-		return 'md' === pathinfo( $clean_path, PATHINFO_EXTENSION );
+		return true;
 	}
 
 	/**

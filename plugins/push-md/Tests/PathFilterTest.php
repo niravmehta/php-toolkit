@@ -64,8 +64,6 @@ class PathFilterTest extends TestCase {
 			'.vscode/settings.json',
 			'temp/scratch.md',
 			'random.txt',
-			'post/invalid/deep/post.md',
-			'wp_template/invalid.md',
 		);
 
 		foreach ( $ignored as $path ) {
