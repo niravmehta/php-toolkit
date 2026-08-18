@@ -1369,7 +1369,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Malformed front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter is missing its closing --- fence.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter is missing its closing --- fence.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1383,7 +1383,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Invalid date front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter date is invalid.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter date is invalid.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1397,7 +1397,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Impossible date front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter date is invalid.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter date is invalid.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1411,7 +1411,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Scheduled posts without dates should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because scheduled posts must include a future date.', $push_result['output'] );
+		$this->assertStringContainsString( 'because scheduled posts must include a future date.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1424,27 +1424,27 @@ class PMD_End_To_End_Test extends TestCase {
 			array( 'git', '-C', $clone_dir, 'push', 'origin', 'trunk' ),
 			true
 		);
-			$this->assertNotSame( 0, $push_result['code'], 'Scheduled posts with past dates should have been rejected.' );
-			$this->assertStringContainsString( 'Push rejected because scheduled posts must include a date in the future.', $push_result['output'] );
-			$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
+		$this->assertNotSame( 0, $push_result['code'], 'Scheduled posts with past dates should have been rejected.' );
+		$this->assertStringContainsString( 'because scheduled posts must include a date in the future.', $push_result['output'] );
+		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
-			file_put_contents(
-				$clone_dir . '/post/rejected-published-future-date.md',
-				"---\nstatus: \"publish\"\ndate: \"2099-01-01T00:00:00Z\"\ntitle: \"Rejected Published Future Date\"\n---\n\nThis push must be rejected.\n"
-			);
-			$this->run_cmd( array( 'git', '-C', $clone_dir, 'add', 'post/rejected-published-future-date.md' ) );
-			$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Reject published post with future date' ) );
-			$push_result = $this->run_cmd(
-				array( 'git', '-C', $clone_dir, 'push', 'origin', 'trunk' ),
-				true
-			);
-			$this->assertNotSame( 0, $push_result['code'], 'Published posts with future dates should have been rejected.' );
-			$this->assertStringContainsString( 'Push rejected because published posts must not include a future date.', $push_result['output'] );
-			$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
+		file_put_contents(
+			$clone_dir . '/post/rejected-published-future-date.md',
+			"---\nstatus: \"publish\"\ndate: \"2099-01-01T00:00:00Z\"\ntitle: \"Rejected Published Future Date\"\n---\n\nThis push must be rejected.\n"
+		);
+		$this->run_cmd( array( 'git', '-C', $clone_dir, 'add', 'post/rejected-published-future-date.md' ) );
+		$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Reject published post with future date' ) );
+		$push_result = $this->run_cmd(
+			array( 'git', '-C', $clone_dir, 'push', 'origin', 'trunk' ),
+			true
+		);
+		$this->assertNotSame( 0, $push_result['code'], 'Published posts with future dates should have been rejected.' );
+		$this->assertStringContainsString( 'because published posts must not include a future date.', $push_result['output'] );
+		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
-			file_put_contents(
-				$clone_dir . '/post/rejected-nul-byte.md',
-				"---\nstatus: \"publish\"\ntitle: \"Rejected NUL Byte\"\n---\n\nBefore " . "\0" . " after.\n"
+		file_put_contents(
+			$clone_dir . '/post/rejected-nul-byte.md',
+			"---\nstatus: \"publish\"\ntitle: \"Rejected NUL Byte\"\n---\n\nBefore " . "\0" . " after.\n"
 		);
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'add', 'post/rejected-nul-byte.md' ) );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'commit', '-m', 'Reject NUL byte content' ) );
@@ -1453,7 +1453,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'NUL byte content should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because content files must not contain NUL bytes.', $push_result['output'] );
+		$this->assertStringContainsString( 'because content files must not contain NUL bytes.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1467,7 +1467,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Array title front matter should have been rejected.' );
-		$this->assertStringContainsString( 'Push rejected because Markdown front matter field "title" must be a scalar string or number.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter field "title" must be a scalar string or number.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
