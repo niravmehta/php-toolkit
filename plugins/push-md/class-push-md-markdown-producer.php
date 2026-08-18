@@ -52,7 +52,7 @@ class Push_MD_Markdown_Producer {
 
 		$content = $this->blocks_with_meta->get_block_markup();
 
-		if ( $this->content_has_blocks( $content ) ) {
+		if ( ! empty( $content ) && is_string( $content ) && $this->content_has_blocks( $content ) ) {
 			// Gutenberg content: handle core/quote blocks that have innerHTML instead of nested innerBlocks.
 			$content = preg_replace_callback(
 				'#<!-- wp:quote\b[^>]*-->\s*<blockquote\b[^>]*>(.*?)</blockquote>\s*<!-- /wp:quote -->#is',
@@ -153,7 +153,20 @@ class Push_MD_Markdown_Producer {
 		}
 		$frontmatter = '';
 		foreach ( $metadata as $key => $value ) {
-			$frontmatter .= $key . ': ' . json_encode( $value ) . "\n";
+			if ( is_string( $value ) ) {
+				$value = trim( $value );
+			} elseif ( is_array( $value ) ) {
+				$value = array_map(
+					function ( $v ) {
+						return is_string( $v ) ? trim( $v ) : $v;
+					},
+					$value
+				);
+			}
+			$json_val     = function_exists( 'wp_json_encode' )
+				? wp_json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE )
+				: json_encode( $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+			$frontmatter .= $key . ': ' . $json_val . "\n";
 		}
 		return "---\n" . $frontmatter . "---\n\n";
 	}

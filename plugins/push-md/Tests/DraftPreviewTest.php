@@ -17,6 +17,7 @@ if ( ! class_exists( 'WP_Post' ) ) {
 		public $post_excerpt      = '';
 		public $post_status       = 'publish';
 		public $post_content      = '';
+		public $post_date         = '2026-01-01 00:00:00';
 		public $post_date_gmt     = '2026-01-01 00:00:00';
 		public $post_modified     = '2026-01-01 00:00:00';
 		public $post_modified_gmt = '2026-01-01 00:00:00';
@@ -388,7 +389,7 @@ class DraftPreviewTest extends TestCase {
 		$this->assertSame( 32, strlen( $token1 ) );
 		$this->assertSame( 32, strlen( $token2 ) );
 		$this->assertNotEquals( $token1, $token2 );
-		$this->assertMatchesRegularExpression( '/^[a-f0-9]{32}$/', $token1 );
+		$this->assertTrue( (bool) preg_match( '/^[a-f0-9]{32}$/', $token1 ) );
 	}
 
 	public function testCreateAndUpdatePreviewRevision() {
@@ -475,7 +476,7 @@ class DraftPreviewTest extends TestCase {
 
 		$exported = Push_MD_Plugin::export_post_to_markdown( $post );
 
-		$this->assertStringContainsString( 'status: "draft"', $exported );
+		$this->assertStringContainsString( 'status: "published"', $exported );
 		$this->assertStringContainsString( 'Draft Revision Content', $exported );
 		$this->assertStringNotContainsString( 'Live Content', $exported );
 	}
@@ -541,5 +542,27 @@ class DraftPreviewTest extends TestCase {
 		$this->assertStringContainsString( 'status: "published"', $exported );
 		$this->assertStringContainsString( 'Live Published Content', $exported );
 		$this->assertStringNotContainsString( 'Old Core History Content', $exported );
+	}
+
+	public function testMasterPostExportStatusPreservesPublishedStatusEvenWhenDraftPreviewRevisionExists() {
+		$post               = new WP_Post();
+		$post->ID           = 99;
+		$post->post_title   = 'Published Post With Active Draft Preview';
+		$post->post_name    = 'published-preview-post';
+		$post->post_status  = 'publish';
+		$post->post_content = 'Main Published Content';
+		$post->post_date_gmt = '2026-01-01 00:00:00';
+		$post->post_date     = '2026-01-01 00:00:00';
+
+		global $mock_wp_posts;
+		$mock_wp_posts[99] = $post;
+
+		// Create active draft preview revision
+		Push_MD_Draft_Previews::create_or_update_preview_revision( 99, 'Draft Staged Content' );
+
+		// Verify main post export retains published status
+		$exported = Push_MD_Plugin::export_post_to_markdown( $post );
+		$this->assertStringContainsString( 'status: "published"', $exported );
+		$this->assertStringContainsString( 'Draft Staged Content', $exported );
 	}
 }

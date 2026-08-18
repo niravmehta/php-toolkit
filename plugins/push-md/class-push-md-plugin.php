@@ -2141,7 +2141,6 @@ class Push_MD_Plugin {
 		if ( class_exists( 'Push_MD_Draft_Previews' ) ) {
 			$preview_revision = Push_MD_Draft_Previews::find_preview_revision( $post->ID );
 			if ( $preview_revision instanceof WP_Post ) {
-				$export_status  = 'draft';
 				$export_content = $preview_revision->post_content;
 			}
 		}
@@ -2209,6 +2208,7 @@ class Push_MD_Plugin {
 		}
 
 		$metadata = apply_filters( 'push_md_export_frontmatter', $metadata, $post );
+		$metadata = self::clean_metadata_value( $metadata );
 		$metadata = self::sort_frontmatter_keys( $metadata );
 
 		$producer = new Push_MD_Markdown_Producer(
@@ -2219,6 +2219,22 @@ class Push_MD_Plugin {
 		);
 
 		return $producer->produce();
+	}
+
+	public static function clean_metadata_value( $value ) {
+		if ( is_string( $value ) ) {
+			$cleaned = stripslashes( $value );
+			$cleaned = html_entity_decode( $cleaned, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+			return trim( $cleaned );
+		}
+		if ( is_array( $value ) ) {
+			$cleaned_array = array();
+			foreach ( $value as $k => $v ) {
+				$cleaned_array[ $k ] = self::clean_metadata_value( $v );
+			}
+			return $cleaned_array;
+		}
+		return $value;
 	}
 
 	public static function sort_frontmatter_keys( $metadata ) {
@@ -2315,7 +2331,9 @@ class Push_MD_Plugin {
 	}
 
 	private static function quote_yaml_scalar( $value ) {
-		$encoded = wp_json_encode( (string) $value );
+		$encoded = function_exists( 'wp_json_encode' )
+			? wp_json_encode( (string) $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE )
+			: json_encode( (string) $value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 		if ( false === $encoded ) {
 			return '""';
 		}
@@ -5573,6 +5591,9 @@ class Push_MD_Plugin {
 	}
 
 	public static function throw_on_php_warning( $severity, $message, $file, $line ) {
+		if ( ( $severity & ( E_DEPRECATED | E_USER_DEPRECATED ) ) ) {
+			return true;
+		}
 		throw new ErrorException( esc_html( $message ), 0, (int) $severity, esc_html( $file ), (int) $line );
 	}
 }
