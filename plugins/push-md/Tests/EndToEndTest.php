@@ -1383,7 +1383,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Invalid date front matter should have been rejected.' );
-		$this->assertStringContainsString( 'because Markdown front matter date is invalid.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter date "not a date" is invalid.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
@@ -1397,7 +1397,7 @@ class PMD_End_To_End_Test extends TestCase {
 			true
 		);
 		$this->assertNotSame( 0, $push_result['code'], 'Impossible date front matter should have been rejected.' );
-		$this->assertStringContainsString( 'because Markdown front matter date is invalid.', $push_result['output'] );
+		$this->assertStringContainsString( 'because Markdown front matter date "2024-02-31" is invalid.', $push_result['output'] );
 		$this->run_cmd( array( 'git', '-C', $clone_dir, 'reset', '--hard', 'HEAD~1' ) );
 
 		file_put_contents(
