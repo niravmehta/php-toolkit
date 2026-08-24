@@ -1221,4 +1221,57 @@ MD;
 
 		$this->assertEquals( $expected_keys, $sorted_keys );
 	}
+
+	public function testCleanMetadataValueCollapsesNewlinesAndWhitespace() {
+		$raw = "This or that? The question lingers for days as one tries to find the right tool. \n\nLooking for an answer?\n\nRead the article to learn more.";
+		$cleaned = Push_MD_Plugin::clean_metadata_value( $raw );
+		$expected = 'This or that? The question lingers for days as one tries to find the right tool. Looking for an answer? Read the article to learn more.';
+		$this->assertEquals( $expected, $cleaned );
+
+		$tabs_and_spaces = "\t  Hello \r\n\t  World   \t";
+		$this->assertEquals( 'Hello World', Push_MD_Plugin::clean_metadata_value( $tabs_and_spaces ) );
+	}
+
+	public function testCleanMetadataValueRecursesArrays() {
+		$raw_array = array(
+			'description' => "Line 1\nLine 2",
+			'nested'      => array(
+				'item' => "Tab\tSeparated\n\nValues",
+			),
+		);
+		$cleaned = Push_MD_Plugin::clean_metadata_value( $raw_array );
+		$this->assertEquals( 'Line 1 Line 2', $cleaned['description'] );
+		$this->assertEquals( 'Tab Separated Values', $cleaned['nested']['item'] );
+	}
+
+	public function testExportPostWithMultilineExcerptProducesSingleLineDescription() {
+		$post = $this->create_dummy_post(
+			array(
+				'ID'           => 404,
+				'post_title'   => 'Multiline Excerpt Post',
+				'post_excerpt' => "First paragraph excerpt.\n\nSecond paragraph excerpt.",
+				'post_content' => '<!-- wp:paragraph --><p>Content</p><!-- /wp:paragraph -->',
+			)
+		);
+
+		$markdown = Push_MD_Plugin::export_post_to_markdown( $post );
+		$this->assertStringContainsString( 'description: "First paragraph excerpt. Second paragraph excerpt."', $markdown );
+		$this->assertStringNotContainsString( "\nLooking", $markdown );
+	}
+
+	public function testExportMasterMetadataWithMultilineDescriptionProducesSingleLineYaml() {
+		$items = array(
+			array(
+				'id'          => 10,
+				'slug'        => 'tech',
+				'name'        => 'Technology',
+				'description' => "Category description line 1.\n\nLine 2.",
+			),
+		);
+
+		$yaml = Push_MD_Master_Metadata::format_yaml_list( 'categories', $items );
+		$this->assertStringContainsString( 'description: "Category description line 1. Line 2."', $yaml );
+		$this->assertStringNotContainsString( "\nLine 2", $yaml );
+	}
 }
+

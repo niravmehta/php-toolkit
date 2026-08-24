@@ -105,6 +105,9 @@ class Push_MD_Master_Metadata {
 		foreach ( $items as $item ) {
 			$first = true;
 			foreach ( $item as $k => $v ) {
+				if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'clean_metadata_value' ) ) {
+					$v = Push_MD_Plugin::clean_metadata_value( $v );
+				}
 				$val_str = wp_json_encode( (string) $v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 				if ( $first ) {
 					$yaml .= '  - ' . $k . ': ' . $val_str . "\n";

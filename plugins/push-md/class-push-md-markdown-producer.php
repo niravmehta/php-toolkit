@@ -148,6 +148,9 @@ class Push_MD_Markdown_Producer {
 		if ( empty( $metadata ) ) {
 			return '';
 		}
+		if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'clean_metadata_value' ) ) {
+			$metadata = Push_MD_Plugin::clean_metadata_value( $metadata );
+		}
 		if ( class_exists( 'Push_MD_Plugin' ) && method_exists( 'Push_MD_Plugin', 'sort_frontmatter_keys' ) ) {
 			$metadata = Push_MD_Plugin::sort_frontmatter_keys( $metadata );
 		}
