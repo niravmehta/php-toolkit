@@ -6,6 +6,7 @@
  * Version: 0.6.10
  * Requires at least: 6.9
  * Requires PHP: 7.2
+ * Update URI: false
  * Author: Automattic
  * Author URI: https://automattic.com/
  * License: GPL-2.0-or-later

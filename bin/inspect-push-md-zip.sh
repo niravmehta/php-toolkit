@@ -48,7 +48,7 @@ reject_content_pattern() {
 	matches="$(
 		while IFS= read -r path; do
 			case "$path" in
-				*.php|*/readme.txt)
+				(*.php|*/readme.txt)
 					unzip -p "$ZIP_PATH" "$path" | grep -En "$pattern" | sed "s#^#$path:#" || true
 					;;
 			esac
