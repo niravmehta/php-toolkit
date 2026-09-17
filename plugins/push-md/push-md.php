@@ -43,6 +43,7 @@ require_once __DIR__ . '/class-push-md-admin.php';
 require_once __DIR__ . '/class-push-md-pull-requests.php';
 require_once __DIR__ . '/class-push-md-draft-previews.php';
 require_once __DIR__ . '/class-push-md-master-metadata.php';
+require_once __DIR__ . '/class-push-md-comments.php';
 
 if ( ! defined( 'PUSH_MD_PLUGIN_FILE' ) ) {
 	define( 'PUSH_MD_PLUGIN_FILE', __FILE__ );

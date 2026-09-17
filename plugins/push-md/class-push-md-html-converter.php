@@ -19,6 +19,30 @@ use WordPress\DataLiberation\DataLiberationHTMLProcessor;
 class Push_MD_HTML_Converter {
 
 	/**
+	 * Line break string emitted for <br> tags.
+	 *
+	 * @var string
+	 */
+	private static $line_break = "\n";
+
+	/**
+	 * Execute a callback with a custom line break string for <br> tags.
+	 *
+	 * @param string   $line_break Line break string to emit for <br> tags.
+	 * @param callable $callback   Function to execute.
+	 * @return mixed Return value of the callback.
+	 */
+	public static function with_line_break( $line_break, $callback ) {
+		$previous         = self::$line_break;
+		self::$line_break = $line_break;
+		try {
+			return call_user_func( $callback );
+		} finally {
+			self::$line_break = $previous;
+		}
+	}
+
+	/**
 	 * Convert an HTML string to Markdown.
 	 *
 	 * @param string $html The HTML to convert.
@@ -362,7 +386,7 @@ class Push_MD_HTML_Converter {
 						break;
 
 					case 'BR':
-						$output .= "\n";
+						$output .= self::$line_break;
 						break;
 				}
 			} else {
@@ -589,8 +613,8 @@ class Push_MD_HTML_Converter {
 			$text
 		);
 
-		// Clean up trailing space before punctuation directly following delimiters and collapse multiple spaces (except indentation).
-		$text = preg_replace( '/(?<!^|\n)[ \t]{2,}/m', ' ', $text );
+		// Clean up trailing space before punctuation directly following delimiters and collapse multiple spaces (except indentation and trailing line breaks).
+		$text = preg_replace( '/(?<!^|\n)[ \t]{2,}(?!\n|$)/m', ' ', $text );
 		$text = preg_replace( '/(\*\*|\*|~~|`)[ \t]+([.,?!;:])/u', '$1$2', $text );
 
 		return $text;

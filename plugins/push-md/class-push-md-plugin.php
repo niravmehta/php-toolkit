@@ -1572,6 +1572,8 @@ class Push_MD_Plugin {
 			$files[ $m_path ] = $m_entry;
 		}
 
+		Push_MD_Comments::add_comment_files( $files );
+
 		// Always keep a placeholder so the media/ staging directory exists in the
 		// repository tree even after all uploaded images have been cleaned up.
 		// Without this, git would delete the empty directory on git pull.
